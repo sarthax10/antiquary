@@ -1,0 +1,7 @@
+.env
+.venv/
+n8n-install/
+media/
+__pycache__/
+*.pyc
+.mise.toml

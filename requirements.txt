@@ -1,0 +1,6 @@
+edge-tts
+faster-whisper
+requests
+pillow
+flask
+python-dotenv
