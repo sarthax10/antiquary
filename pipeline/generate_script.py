@@ -121,7 +121,7 @@ def fact_check(narration: str) -> dict:
     return _chat_json(OLLAMA_HOST, FACTCHECK_MODEL, FACTCHECK_SYSTEM_PROMPT, narration)
 
 
-def generate(topic: str, max_attempts: int = 4) -> dict:
+def generate(topic: str, max_attempts: int = 4, on_stage=None) -> dict:
     """A small local model occasionally: (a) returns JSON missing expected keys despite
     format="json" only guaranteeing valid JSON syntax, not our schema (more likely the
     larger/more the schema asks for in one call — so this is split into three focused
@@ -129,14 +129,22 @@ def generate(topic: str, max_attempts: int = 4) -> dict:
     fact-check), or (b) writes content that deterministically fails Ollama's json-mode
     grammar on a later call (retrying the *same* content doesn't help — regenerating does,
     since that's content-dependent, not a transient network blip). So on any failure,
-    regenerate the whole script from scratch rather than retry the same broken output."""
+    regenerate the whole script from scratch rather than retry the same broken output.
+
+    `on_stage`, if given, is called with "writing" before the writer/visual-queries calls
+    and "fact_checking" before the fact-check call — real progress reporting for the UI,
+    not a simulated timer. Optional so this module has no hard dependency on the caller."""
     last_error = None
     for attempt in range(max_attempts):
         try:
+            if on_stage:
+                on_stage("writing")
             script = write_script(topic)
             if not REQUIRED_SCRIPT_KEYS.issubset(script):
                 raise ValueError(f"writer output missing keys: {REQUIRED_SCRIPT_KEYS - script.keys()}")
             script["visual_queries"] = write_visual_queries(script["narration"])
+            if on_stage:
+                on_stage("fact_checking")
             checked = fact_check(script["narration"])
         except (requests.exceptions.RequestException, json.JSONDecodeError, KeyError, ValueError) as e:
             last_error = e

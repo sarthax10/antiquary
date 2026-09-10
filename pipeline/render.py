@@ -53,16 +53,21 @@ def render(audio_path: str, ass_path: str, out_path: str, media: list[str]) -> N
             cmd += ["-loop", "1", "-t", f"{clip_len:.3f}", "-i", path]
     cmd += ["-i", audio_path]
 
+    # [i:v:0], not [i:v]: some downloaded stock clips ship as a "stream group" with more
+    # than one video stream bundled in the container (an HDR/enhancement-layer variant, in
+    # one observed crash) — automatic stream selection ([i:v]) can pick ambiguously inside
+    # a multi-input filter_complex and crash ffmpeg outright. Pinning stream 0 explicitly
+    # avoids that regardless of how any given source file is muxed.
     filter_parts = []
     for i, path in enumerate(media):
         if path.lower().endswith(VIDEO_EXTS):
             filter_parts.append(
-                f"[{i}:v]scale=-2:{HEIGHT}:force_original_aspect_ratio=increase,"
+                f"[{i}:v:0]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
                 f"crop={WIDTH}:{HEIGHT},setpts=PTS-STARTPTS,fps={FPS},format=yuv420p[v{i}]"
             )
         else:
             filter_parts.append(
-                f"[{i}:v]scale=8000:-1,"
+                f"[{i}:v:0]scale=8000:-1,"
                 f"zoompan=z='min(zoom+{ZOOM_RATE},1.3)':d={clip_frames}:s={WIDTH}x{HEIGHT}:fps={FPS},"
                 f"format=yuv420p[v{i}]"
             )

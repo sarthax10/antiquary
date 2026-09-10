@@ -4,3 +4,13 @@ requests
 pillow
 flask
 python-dotenv
+
+# Auth, database, storage, deployment (multi-user web app)
+flask-login
+flask-wtf
+flask-limiter
+sqlalchemy
+alembic
+psycopg2-binary
+boto3
+gunicorn

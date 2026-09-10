@@ -1,0 +1,17 @@
+{$DOMAIN} {
+	encode gzip
+
+	# Everything under /api/* goes to the Flask JSON API.
+	handle /api/* {
+		reverse_proxy app:8787
+	}
+
+	# Everything else is the built React SPA. try_files falls back to index.html for
+	# any path that isn't a real static file, so client-side routes (e.g. /review)
+	# still work on a hard refresh, not just client-side navigation.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

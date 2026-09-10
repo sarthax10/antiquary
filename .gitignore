@@ -5,3 +5,10 @@ media/
 __pycache__/
 *.pyc
 .mise.toml
+
+# Frontend build artifacts — never commit these, CI builds fresh from source
+frontend/node_modules/
+frontend/dist/
+
+# Alembic/local scratch
+*.log
