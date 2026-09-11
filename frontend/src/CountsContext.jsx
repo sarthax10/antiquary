@@ -20,14 +20,20 @@ export function CountsProvider({ children }) {
   const [pendingMembers, setPendingMembers] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const inflight = useRef(null);
+  const queued = useRef(false);
 
   const isApproved = user?.status === "approved";
   const isAdmin = isApproved && user?.role === "admin";
 
   const refresh = useCallback(() => {
     if (!isApproved) return Promise.resolve();
-    // Coalesce bursts (e.g. route change + decision in the same tick) into one fetch.
-    if (inflight.current) return inflight.current;
+    // Coalesce bursts into one fetch — but if a refresh is requested while one is in
+    // flight (e.g. Undo right after a decision), run exactly one more afterwards so the
+    // counts never settle on data from before the latest change.
+    if (inflight.current) {
+      queued.current = true;
+      return inflight.current;
+    }
     const p = Promise.all([
       listStories("pending"),
       listStories("approved"),
@@ -44,10 +50,17 @@ export function CountsProvider({ children }) {
       })
       .finally(() => {
         inflight.current = null;
+        if (queued.current) {
+          queued.current = false;
+          refreshRef.current?.();
+        }
       });
     inflight.current = p;
     return p;
   }, [isApproved, isAdmin]);
+
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
 
   useEffect(() => {
     if (isApproved) refresh();

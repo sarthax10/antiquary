@@ -6,7 +6,7 @@ import { useToast } from "../ToastContext";
 import { StageSegments } from "../components/GenerationIndicator";
 import { IconAlert, IconArrowRight, IconCheck, IconInfo, IconShuffle, IconSparkle, IconStop, IconX } from "../components/icons";
 import StoryPoster, { PosterSkeleton } from "../components/StoryPoster";
-import { Button, Callout, ConfirmDialog, Kbd } from "../components/ui";
+import { Button, Callout, ConfirmDialog, ErrorState, Kbd } from "../components/ui";
 import { formatDateTime, pad2, timeAgo } from "../lib/format";
 import { modKey, safeStorage, useDocumentTitle, useNow } from "../lib/hooks";
 
@@ -265,7 +265,7 @@ function LastRunNotice({ status, recent }) {
 
 export default function Create() {
   useDocumentTitle("Create");
-  const { status, running, onFinish } = useGeneration();
+  const { status, running, onFinish, error: statusError, refresh: refreshStatus } = useGeneration();
   const [recent, setRecent] = useState(null);
   const [recentError, setRecentError] = useState(null);
 
@@ -301,7 +301,9 @@ export default function Create() {
       </section>
 
       <div className="create-stack">
-        {status === null ? (
+        {status === null && statusError ? (
+          <ErrorState title="Couldn’t check the generation status" error={statusError} onRetry={refreshStatus} />
+        ) : status === null ? (
           <div className="panel skeleton" style={{ height: 260 }} aria-hidden="true" />
         ) : running ? (
           <Developing />
