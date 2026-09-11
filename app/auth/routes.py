@@ -8,6 +8,7 @@ from flask_wtf.csrf import generate_csrf
 from app.extensions import limiter
 
 from . import service
+from .decorators import admin_required
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
@@ -65,3 +66,13 @@ def login():
 def logout():
     logout_user()
     return jsonify(message="Logged out.")
+
+
+@bp.route("/admin-check")
+@admin_required
+def admin_check():
+    """Used by Caddy's forward_auth in front of /stats (Netdata) — being logged into
+    Antiquary as an admin, via the same session cookie, is the only credential needed
+    to see server metrics. No separate password to manage. Empty 204: forward_auth only
+    looks at the status code, and the cookie's already same-origin/same-request."""
+    return "", 204

@@ -18,15 +18,15 @@
 		reverse_proxy app:8787
 	}
 
-	# Server/container resource metrics (Netdata), password-gated since it exposes real
-	# system internals. handle_path strips the /stats prefix before proxying — Netdata
-	# itself has no idea it's being served from a subpath. The bcrypt hash comes from
-	# NETDATA_AUTH_HASH in .env (git-ignored, like every other secret here) — never
-	# hardcode it here. Plaintext password lives in the "Antiquary — Production Server
-	# Secrets" Notion vault.
+	# Server/container resource metrics (Netdata). Gated by the same admin login as the
+	# app itself — no separate password to manage. forward_auth forwards the incoming
+	# request (including the browser's session cookie) to /api/auth/admin-check; a 2xx
+	# there lets the request through to Netdata, anything else blocks it with that same
+	# status. handle_path strips the /stats prefix before proxying — Netdata itself has
+	# no idea it's being served from a subpath.
 	handle_path /stats/* {
-		basic_auth {
-			admin {$NETDATA_AUTH_HASH}
+		forward_auth app:8787 {
+			uri /api/auth/admin-check
 		}
 		reverse_proxy netdata:19999
 	}
