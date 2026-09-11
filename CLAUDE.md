@@ -84,8 +84,27 @@ This project has no dependency on Anthropic/Claude at runtime at all.
 - Rate limiting (`Flask-Limiter`) uses in-memory storage — fine for the current
   single-`app`-container deployment, but won't share state if you ever scale to
   multiple app instances. Would need a Redis backend at that point.
-- No publish-to-YouTube/Instagram step yet — "Approved" stops at making a story
-  eligible; nothing in this repo actually posts anywhere.
+- Publish-to-YouTube: **working, verified against a real account and a real upload** —
+  not just plumbing that looked right. `app/social/` (per-user OAuth connect/disconnect,
+  Settings > Connections in the UI) + `app/publishing/` (`Publication` row per
+  story+platform attempt, background thread, Publish button in Library) both exist and
+  were exercised end-to-end for real: connected a live YouTube channel, clicked Publish
+  on an approved story, confirmed the video actually live on youtube.com.
+  Uploads are **public** — Antiquary's own human review step (app/studio/) is the real
+  gate; there's no second, silent platform-level privacy gate behind it.
+  Publish is NOT globally serialized like generation is — that constraint is
+  Ollama-CPU-specific (see below) and doesn't apply to an HTTP upload; it's only guarded
+  per (story, platform) so the same story can't be double-uploaded to the same platform
+  from two clicks. That guard, and orphaned-job detection, is staleness-based off
+  `Publication.updated_at` — NOT in-memory state — because gunicorn runs multiple worker
+  *processes* (`--workers 2`); a first version tracked in-flight jobs in a Python-level
+  set and it was wrong in production (a status-poll request landing on a different
+  worker than the one running the upload saw no record of the job and wrongly marked a
+  succeeding upload as "interrupted"). If you touch this concurrency logic again, keep
+  the source of truth in the database, not in a worker-local variable.
+  Instagram's connect flow and publish job are still unbuilt (needs Meta App Review —
+  see CLAUDE.md's original plan discussion). Performance-metrics/insights dashboard is a
+  separate, later phase — nothing here polls view/like counts yet.
 - No automated test suite exists yet. Verification so far has been manual/live
   (curl'ing the API, driving the React app in a real browser) — thorough, but not
   regression-proof. Worth adding `tests/` mirroring `app/`'s structure if this keeps

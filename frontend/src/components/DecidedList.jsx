@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import * as socialApi from "../api/social";
 import * as studioApi from "../api/studio";
 import { useCounts } from "../CountsContext";
 import { IconRestore } from "./icons";
+import PublishControls from "./PublishControls";
 
 function formatDuration(seconds) {
   if (seconds == null) return "—";
@@ -9,8 +11,9 @@ function formatDuration(seconds) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-export default function DecidedList({ status, emptyTitle, emptySub }) {
+export default function DecidedList({ status, emptyTitle, emptySub, showPublish = false }) {
   const [items, setItems] = useState(null);
+  const [connectedAccounts, setConnectedAccounts] = useState(null);
   const { refresh: refreshCounts } = useCounts();
 
   function refresh() {
@@ -18,6 +21,9 @@ export default function DecidedList({ status, emptyTitle, emptySub }) {
   }
 
   useEffect(refresh, [status]);
+  useEffect(() => {
+    if (showPublish) socialApi.listAccounts().then(setConnectedAccounts);
+  }, [showPublish]);
 
   async function restore(id) {
     await studioApi.restoreStory(id);
@@ -50,6 +56,9 @@ export default function DecidedList({ status, emptyTitle, emptySub }) {
             <button type="button" className="btn btn-outline" onClick={() => restore(s.id)}>
               <IconRestore />Move back to review
             </button>
+            {showPublish && connectedAccounts && (
+              <PublishControls storyId={s.id} connectedAccounts={connectedAccounts} />
+            )}
           </div>
         </div>
       ))}

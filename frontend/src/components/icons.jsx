@@ -16,3 +16,4 @@ export const IconChevronL = () => base(<path d="M14.5 5l-6.5 7 6.5 7" />);
 export const IconChevronR = () => base(<path d="M9.5 5l6.5 7-6.5 7" />);
 export const IconStop = () => base(<rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none" />);
 export const IconUncertain = () => base(<><circle cx="12" cy="12" r="9" /><path d="M12 16v.01M12 8v5" /></>);
+export const IconConnections = () => base(<><circle cx="6" cy="12" r="3" /><circle cx="18" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><path d="M8.6 10.6l6.8-3.2M8.6 13.4l6.8 3.2" /></>);

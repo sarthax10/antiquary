@@ -54,3 +54,10 @@ def get_video_object(object_key: str, range_header: str | None = None) -> dict:
 
 def delete_video(object_key: str) -> None:
     _client().delete_object(Bucket=S3_BUCKET, Key=object_key)
+
+
+def download_video(object_key: str, local_path: str) -> None:
+    """Pulls a video down to a local file — used by app/publishing/manager.py, which
+    needs a real file on disk for YouTube's resumable-upload PUT (Content-Length has to
+    be known upfront), not the same streaming-through-Flask path story_video() uses."""
+    _client().download_file(S3_BUCKET, object_key, local_path)

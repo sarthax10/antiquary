@@ -6,6 +6,7 @@ export default function Library() {
       status="approved"
       emptyTitle="Nothing approved yet."
       emptySub="Approved stories will collect here, ready for the publish workflow."
+      showPublish
     />
   );
 }

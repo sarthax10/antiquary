@@ -2,13 +2,14 @@ import { useEffect } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../AuthContext";
 import { useCounts } from "../CountsContext";
-import { IconArchive, IconCreate, IconLibrary, IconReview } from "./icons";
+import { IconArchive, IconConnections, IconCreate, IconLibrary, IconReview } from "./icons";
 
 const NAV_ITEMS = [
   { to: "/create", label: "Create", icon: IconCreate },
   { to: "/review", label: "Review", icon: IconReview, countKey: "pending" },
   { to: "/library", label: "Library", icon: IconLibrary, countKey: "approved" },
   { to: "/archive", label: "Archive", icon: IconArchive, countKey: "rejected" },
+  { to: "/connections", label: "Connections", icon: IconConnections },
 ];
 
 export default function Sidebar() {

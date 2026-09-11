@@ -97,3 +97,17 @@
 .item-card .ic-meta { font-size: 11.5px; color: var(--ink-muted); margin: 0 0 12px; }
 .item-card form { margin: 0; }
 .item-card .btn { width: 100%; padding: 8px 12px; font-size: 12.5px; }
+
+/* ---- Connections ---- */
+.connections-list { display: flex; flex-direction: column; gap: 14px; }
+.connection-row { padding: 22px 28px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.connection-platform { font-family: var(--serif); font-size: 18px; margin-bottom: 4px; }
+.connection-detail { font-size: 13px; color: var(--ink-muted); }
+
+/* ---- Publish controls (Library) ---- */
+.publish-row { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.btn-publish { width: 100%; padding: 8px 12px; font-size: 12.5px; }
+.publish-status { display: block; font-size: 12px; padding: 7px 10px; border-radius: var(--radius-sm); text-align: center; text-decoration: none; }
+.publish-status-pending { background: var(--elevated); color: var(--ink-muted); }
+.publish-status-done { background: rgba(111,168,122,0.1); border: 1px solid rgba(111,168,122,0.3); color: var(--success); }
+.publish-hint { margin-top: 8px; }

@@ -92,6 +92,30 @@ docker compose logs -f app   # watch for "alembic upgrade head" then gunicorn st
 From then on, every `git push` to `main` triggers the GitHub Actions workflow, which
 rebuilds and restarts the stack on this same server automatically.
 
+## 7. YouTube OAuth client (per-user publishing)
+
+Each user connects their own YouTube channel from Settings > Connections in the app —
+that needs one OAuth client registered for Antiquary itself in Google Cloud Console
+(this identifies the app to Google; it is not any one user's credential):
+
+1. https://console.cloud.google.com → create/select a project → **APIs & Services →
+   Credentials → Create Credentials → OAuth client ID** → type **Web application**.
+2. Under **Authorized redirect URIs**, add `<APP_BASE_URL>/api/social/youtube/callback`
+   — the exact value of `APP_BASE_URL` from your `.env` (e.g.
+   `https://yourname.duckdns.org/api/social/youtube/callback` in production,
+   `http://localhost:5173/api/social/youtube/callback` for local dev).
+3. Also enable the **YouTube Data API v3** for the project (APIs & Services → Library).
+4. Copy the generated Client ID/Secret into `.env` as `YOUTUBE_CLIENT_ID` /
+   `YOUTUBE_CLIENT_SECRET`.
+5. Generate `TOKEN_ENCRYPTION_KEY` (encrypts connected accounts' tokens at rest — a
+   different kind of value than `SECRET_KEY`, don't reuse one for the other):
+   ```bash
+   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+
+Until this is done, the Connect button in the app fails cleanly with "YouTube isn't
+configured on this server yet." rather than erroring — safe to deploy before doing this.
+
 ## Ongoing operation
 
 - **Your data is safe across deploys.** `postgres_data` and `minio_data` are named
