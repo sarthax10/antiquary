@@ -1,10 +1,13 @@
 import { forwardRef, useState } from "react";
 import { videoUrl } from "../api/studio";
 import { IconFilm } from "./icons";
+import VideoPlayer from "./VideoPlayer";
 
 /**
- * The review/detail player. Native controls on purpose: they are keyboard- and
- * screen-reader-accessible, support fullscreen/PiP, and never fall out of date.
+ * The review/detail player. A themed custom player (see VideoPlayer.jsx) rather than
+ * the browser's default controls — the ref still resolves to the underlying <video>
+ * element itself, so callers that reach into it directly (Review.jsx's Space-to-toggle
+ * shortcut) keep working unchanged.
  */
 const VideoFrame = forwardRef(function VideoFrame({ story, stamp, className = "" }, ref) {
   const [failed, setFailed] = useState(false);
@@ -17,14 +20,11 @@ const VideoFrame = forwardRef(function VideoFrame({ story, stamp, className = ""
           <span className="meta">The render for this story couldn’t be loaded.</span>
         </div>
       ) : (
-        <video
+        <VideoPlayer
           ref={ref}
           key={story.id}
           src={videoUrl(story.id)}
-          controls
-          playsInline
-          preload="metadata"
-          aria-label={`Video: ${story.title || "Untitled"}`}
+          ariaLabel={`Video: ${story.title || "Untitled"}`}
           onError={() => setFailed(true)}
         />
       )}

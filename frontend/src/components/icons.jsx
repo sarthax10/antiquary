@@ -118,6 +118,33 @@ export const IconPlay = (p) => (
     <path d="M7.5 5.5v13l11-6.5-11-6.5Z" />
   </Svg>
 );
+export const IconPause = (p) => (
+  <Svg {...p}>
+    <path d="M8 5.5v13M16 5.5v13" />
+  </Svg>
+);
+export const IconVolume = (p) => (
+  <Svg {...p}>
+    <path d="M4 9.5v5h4l5.5 4.5v-14L8 9.5H4Z" />
+    <path d="M17 9a5 5 0 0 1 0 6M19.7 6.3a9 9 0 0 1 0 11.4" />
+  </Svg>
+);
+export const IconVolumeMute = (p) => (
+  <Svg {...p}>
+    <path d="M4 9.5v5h4l5.5 4.5v-14L8 9.5H4Z" />
+    <path d="m16.5 10 4.5 4M21 10l-4.5 4" />
+  </Svg>
+);
+export const IconExpand = (p) => (
+  <Svg {...p}>
+    <path d="M9 4.5H4.5V9M15 4.5h4.5V9M4.5 15v4.5H9M19.5 15v4.5H15" />
+  </Svg>
+);
+export const IconCompress = (p) => (
+  <Svg {...p}>
+    <path d="M4.5 9H9V4.5M19.5 9H15V4.5M9 19.5V15H4.5M15 19.5V15h4.5" />
+  </Svg>
+);
 export const IconAlert = (p) => (
   <Svg {...p}>
     <path d="M12 4 2.8 19.5h18.4L12 4Z" />

@@ -455,6 +455,62 @@ dialog.command::backdrop { background: rgba(5, 4, 3, 0.6); animation: fade-in va
 .command-foot { display: flex; gap: var(--s-4); padding: var(--s-2) var(--s-4); border-top: 1px solid var(--line); color: var(--ink-muted); font-size: 11px; }
 .command-foot span { display: inline-flex; gap: 6px; align-items: center; }
 
+/* ---- Story preview popover (Create's "recently developed" grid) ---------- */
+dialog.preview {
+  position: relative;
+  width: min(1040px, calc(100vw - 2 * var(--s-4)));
+  max-height: calc(100dvh - 2 * var(--s-6));
+  padding: 0;
+  margin: auto;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+dialog.preview[open] { animation: preview-in var(--dur-slow) var(--ease-out) both; }
+dialog.preview::backdrop { background: rgba(5, 4, 3, 0.78); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); animation: fade-in var(--dur-base) var(--ease-out) both; }
+@keyframes preview-in { from { opacity: 0; transform: translateY(16px) scale(0.97); } to { opacity: 1; transform: none; } }
+.preview-close {
+  position: absolute;
+  top: var(--s-4);
+  right: var(--s-4);
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-full);
+  background: rgba(11, 10, 8, 0.55);
+  backdrop-filter: blur(6px);
+  color: var(--ink-2);
+  transition: color var(--dur-fast), background-color var(--dur-fast), border-color var(--dur-fast), transform var(--dur-instant);
+}
+.preview-close svg { width: 16px; height: 16px; }
+.preview-close:hover { color: var(--ink); background: var(--surface-4); border-color: var(--line-bright); }
+.preview-close:active { transform: scale(0.92); }
+.preview-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--s-7);
+  padding: var(--s-7);
+  max-height: calc(100dvh - 2 * var(--s-6));
+  overflow: hidden;
+}
+.preview-stage .frame { width: 100%; box-shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.9), 0 0 0 1px var(--line-strong); }
+.preview-dossier { display: grid; gap: var(--s-6); max-height: calc(100dvh - 2 * var(--s-6) - 2 * var(--s-7)); overflow-y: auto; overscroll-behavior: contain; padding-right: var(--s-2); scrollbar-width: thin; }
+.preview-dossier .dossier-title { font-size: clamp(1.75rem, 1.4rem + 1.3vw, 2.5rem); }
+.preview-dossier .decision-static { padding-top: var(--s-4); }
+@media (max-width: 900px) {
+  .preview-grid { grid-template-columns: minmax(0, 1fr); max-height: calc(100dvh - 2 * var(--s-4)); padding: var(--s-9) var(--s-5) var(--s-5); gap: var(--s-5); }
+  .preview-stage { justify-self: center; width: min(100%, 300px); }
+  .preview-dossier { max-height: none; overflow-y: visible; padding-right: 0; }
+  dialog.preview { max-height: calc(100dvh - 2 * var(--s-4)); }
+}
+
 /* ---- Tooltip (CSS-only, for icon buttons with aria-label) ---------------- */
 [data-tip] { position: relative; }
 @media (hover: hover) {

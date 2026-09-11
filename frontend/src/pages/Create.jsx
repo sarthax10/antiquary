@@ -6,9 +6,11 @@ import { useToast } from "../ToastContext";
 import { StageSegments } from "../components/GenerationIndicator";
 import { IconAlert, IconArrowRight, IconCheck, IconInfo, IconShuffle, IconSparkle, IconStop, IconX } from "../components/icons";
 import StoryPoster, { PosterSkeleton } from "../components/StoryPoster";
+import StoryPreviewModal from "../components/StoryPreviewModal";
 import { Button, Callout, ConfirmDialog, ErrorState, Kbd } from "../components/ui";
 import { formatDateTime, pad2, timeAgo } from "../lib/format";
 import { modKey, safeStorage, useDocumentTitle, useNow } from "../lib/hooks";
+import { requestNotificationPermission } from "../lib/notify";
 
 // The backend stores topics in a String(500) column.
 const MAX_TOPIC = 500;
@@ -66,6 +68,10 @@ function Composer({ onStarted }) {
   async function submit(e) {
     e?.preventDefault();
     if (submitting) return;
+    // Asked for here, not on page load: a real click is what most browsers require
+    // before they'll show the permission prompt at all, and it's the one moment where
+    // "notify me when this finishes" is obviously relevant rather than a cold-open ask.
+    requestNotificationPermission();
     setSubmitting(true);
     try {
       const res = await start(trimmed);
@@ -268,6 +274,12 @@ export default function Create() {
   const { status, running, onFinish, error: statusError, refresh: refreshStatus } = useGeneration();
   const [recent, setRecent] = useState(null);
   const [recentError, setRecentError] = useState(null);
+  const [previewStory, setPreviewStory] = useState(null);
+
+  const handlePreviewChange = useCallback((updated) => {
+    setPreviewStory((s) => (s ? { ...s, ...updated } : s));
+    setRecent((r) => r?.map((s) => (s.id === updated.id ? { ...s, ...updated } : s)) ?? r);
+  }, []);
 
   const loadRecent = useCallback(() => {
     studioApi
@@ -349,6 +361,7 @@ export default function Create() {
                 <StoryPoster
                   story={s}
                   to={s.status === "pending" ? `/review?item=${s.id}` : `/stories/${s.id}`}
+                  onClick={(e) => { e.preventDefault(); setPreviewStory(s); }}
                   meta={<span title={formatDateTime(s.created_at)}>{timeAgo(s.created_at)}</span>}
                 />
               </li>
@@ -356,6 +369,8 @@ export default function Create() {
           </ul>
         )}
       </section>
+
+      <StoryPreviewModal story={previewStory} onClose={() => setPreviewStory(null)} onChange={handlePreviewChange} />
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { videoUrl } from "../api/studio";
 import { claimTotals, formatDuration } from "../lib/format";
 import { prefersReducedMotion, useInView } from "../lib/hooks";
 import { TransitionLink } from "../lib/transitions";
-import { IconFilm, IconFlag } from "./icons";
+import { IconFilm, IconFlag, IconPlay } from "./icons";
 import { Stamp } from "./ui";
 
 const canHover = () => typeof window !== "undefined" && window.matchMedia?.("(hover: hover) and (pointer: fine)").matches;
@@ -13,7 +13,7 @@ const canHover = () => typeof window !== "undefined" && window.matchMedia?.("(ho
  * the video only starts loading when the card nears the viewport, and on devices with a
  * real pointer a short hover plays a muted preview.
  */
-export default function StoryPoster({ story, to, showStatus = true, meta, style, className = "" }) {
+export default function StoryPoster({ story, to, showStatus = true, meta, style, className = "", onClick }) {
   const [ref, inView] = useInView("300px");
   const videoRef = useRef(null);
   const hoverTimer = useRef(null);
@@ -55,6 +55,7 @@ export default function StoryPoster({ story, to, showStatus = true, meta, style,
       to={to}
       className={`poster ${className}`}
       style={style}
+      onClick={onClick}
       onMouseEnter={startPreview}
       onMouseLeave={stopPreview}
       aria-label={`${story.title || "Untitled"}, ${formatDuration(story.duration_seconds)}${showStatus ? `, ${story.status}` : ""}`}
@@ -88,6 +89,11 @@ export default function StoryPoster({ story, to, showStatus = true, meta, style,
           )
         )}
         <span className="poster-shade" aria-hidden="true" />
+        {onClick && (
+          <span className="poster-preview-hint" aria-hidden="true">
+            <IconPlay />
+          </span>
+        )}
         <span className="poster-top" aria-hidden="true">
           {showStatus ? <Stamp status={story.status} className="stamp-overlay">{story.status}</Stamp> : <span />}
           <span className="poster-duration">{formatDuration(story.duration_seconds)}</span>

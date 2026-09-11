@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import * as studioApi from "./api/studio";
 import { useAuth } from "./AuthContext";
 import { useCounts } from "./CountsContext";
+import { notify } from "./lib/notify";
 import { useToast } from "./ToastContext";
 
 // Kept in sync with app/generation/job_manager.py's STAGES — real pipeline steps reported
@@ -50,15 +51,19 @@ export function GenerationProvider({ children }) {
         refreshCounts();
         listeners.current.forEach((fn) => fn(next));
         if (next.status === "done") {
+          const goToReview = () => navigateRef.current(next.story_id ? `/review?item=${next.story_id}` : "/review");
           toast({
             tone: "success",
             title: "A new story is ready for review",
             description: next.topic ? `“${next.topic}”` : "The archive picked this one.",
             duration: 9000,
-            action: { label: "Review", onClick: () => navigateRef.current(next.story_id ? `/review?item=${next.story_id}` : "/review") },
+            action: { label: "Review", onClick: goToReview },
           });
+          notify("A new story is ready", { body: next.topic ? `“${next.topic}” finished and is waiting on the review desk.` : "The archive's free pick is waiting on the review desk.", tag: "antiquary-generation", onClick: goToReview });
         } else if (next.status === "error") {
-          toast({ tone: "error", title: "Generation failed", description: "Details are on the Create page.", duration: 9000, action: { label: "View", onClick: () => navigateRef.current("/create") } });
+          const goToCreate = () => navigateRef.current("/create");
+          toast({ tone: "error", title: "Generation failed", description: "Details are on the Create page.", duration: 9000, action: { label: "View", onClick: goToCreate } });
+          notify("A generation failed", { body: next.topic ? `“${next.topic}” didn’t finish — nothing was saved.` : "Nothing was saved.", tag: "antiquary-generation", onClick: goToCreate });
         }
       }
     },
