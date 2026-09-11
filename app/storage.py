@@ -54,3 +54,12 @@ def get_video_object(object_key: str, range_header: str | None = None) -> dict:
 
 def delete_video(object_key: str) -> None:
     _client().delete_object(Bucket=S3_BUCKET, Key=object_key)
+
+
+def copy_video(old_key: str, new_key: str) -> None:
+    """Renames an object (MinIO/S3 has no atomic rename) — used one-off by the
+    `migrate-video-keys` CLI command to move pre-per-user-scoping objects onto the new
+    stories/<user_id>/<story_id>/video.mp4 layout."""
+    client = _client()
+    client.copy_object(Bucket=S3_BUCKET, CopySource={"Bucket": S3_BUCKET, "Key": old_key}, Key=new_key)
+    client.delete_object(Bucket=S3_BUCKET, Key=old_key)

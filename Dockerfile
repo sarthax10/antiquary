@@ -20,4 +20,4 @@ COPY alembic.ini wsgi.py ./
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8787
 
-CMD ["gunicorn", "wsgi:app", "--bind", "0.0.0.0:8787", "--workers", "2", "--timeout", "180"]
+CMD ["gunicorn", "wsgi:app", "--bind", "0.0.0.0:8787", "--workers", "1", "--worker-class", "gthread", "--threads", "4", "--timeout", "180"]

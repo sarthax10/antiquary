@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { RequireAdmin, RequireApproved } from "./components/ProtectedRoute";
+import Account from "./pages/Account";
 import AdminUsers from "./pages/AdminUsers";
 import Archive from "./pages/Archive";
 import Create from "./pages/Create";
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/library" element={<Library />} />
         <Route path="/archive" element={<Archive />} />
         <Route path="/stories/:id" element={<StoryDetail />} />
+        <Route path="/account" element={<Account />} />
 
         <Route element={<RequireAdmin />}>
           <Route path="/admin/users" element={<AdminUsers />} />

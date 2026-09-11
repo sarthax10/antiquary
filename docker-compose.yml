@@ -75,7 +75,7 @@ services:
       sh -c "alembic upgrade head &&
              flask --app wsgi seed-admin &&
              flask --app wsgi ensure-bucket &&
-             gunicorn wsgi:app --bind 0.0.0.0:8787 --workers 2 --timeout 180"
+             gunicorn wsgi:app --bind 0.0.0.0:8787 --workers 1 --worker-class gthread --threads 4 --timeout 180"
     restart: unless-stopped
     # No host port published — Caddy is the only public entry point.
 

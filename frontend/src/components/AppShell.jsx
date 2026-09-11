@@ -7,7 +7,7 @@ import { isModalOpen, isTypingTarget, modKey } from "../lib/hooks";
 import CommandMenu from "./CommandMenu";
 import ErrorBoundary from "./ErrorBoundary";
 import { GenerationPill, GenerationWidget } from "./GenerationIndicator";
-import { IconDots, IconLogout, IconMark, IconSearch, IconSparkle } from "./icons";
+import { IconDots, IconLogout, IconMark, IconSearch, IconSparkle, IconUser } from "./icons";
 import { ADMIN_ITEMS, NAV_ITEMS } from "./nav";
 import ShortcutsDialog from "./ShortcutsDialog";
 import { Button, Dialog, Kbd } from "./ui";
@@ -74,11 +74,13 @@ function Sidebar({ onOpenCommand }) {
           <span className="kbd-group" aria-hidden="true"><Kbd>{modKey}</Kbd><Kbd>K</Kbd></span>
         </button>
         <div className="account">
-          <span className="avatar" aria-hidden="true">{initial(user?.email)}</span>
-          <div className="account-id">
-            <div className="account-email" title={user?.email}>{user?.email}</div>
-            <div className="account-role">{isAdmin ? "Admin" : "Member"}</div>
-          </div>
+          <Link to="/account" className="account-id" style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, textDecoration: "none", color: "inherit" }} aria-label="Account settings">
+            <span className="avatar" aria-hidden="true">{initial(user?.email)}</span>
+            <span style={{ minWidth: 0 }}>
+              <span className="account-email" title={user?.email} style={{ display: "block" }}>{user?.email}</span>
+              <span className="account-role" style={{ display: "block" }}>{isAdmin ? "Admin" : "Member"}</span>
+            </span>
+          </Link>
           <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={logout} aria-label="Sign out" data-tip="Sign out">
             <IconLogout />
           </button>
@@ -149,6 +151,10 @@ function AccountSheet({ open, onClose, onShowShortcuts }) {
         <Link to="/create" state={{ focusComposer: true }} className="sheet-row" onClick={onClose}>
           <IconSparkle />
           <span>Start a new story</span>
+        </Link>
+        <Link to="/account" className="sheet-row" onClick={onClose}>
+          <IconUser />
+          <span>Account settings</span>
         </Link>
         <button type="button" className="sheet-row" style={{ background: "none", border: 0, textAlign: "left" }} onClick={() => { onClose(); onShowShortcuts(); }}>
           <IconDots />

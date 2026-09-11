@@ -96,7 +96,8 @@ export function GenerationProvider({ children }) {
       if (cancelled) return;
       const next = document.hidden ? prev.current : await refresh();
       if (cancelled) return;
-      timer = setTimeout(loop, next?.status === "running" ? RUNNING_POLL_MS : IDLE_POLL_MS);
+      const active = next?.status === "running" || next?.status === "queued";
+      timer = setTimeout(loop, active ? RUNNING_POLL_MS : IDLE_POLL_MS);
     };
     loop();
     const onVisible = () => {
@@ -135,7 +136,16 @@ export function GenerationProvider({ children }) {
   }, []);
 
   const value = useMemo(
-    () => ({ status, error, running: status?.status === "running", refresh, start, cancel, onFinish }),
+    () => ({
+      status,
+      error,
+      running: status?.status === "running",
+      queued: status?.status === "queued",
+      refresh,
+      start,
+      cancel,
+      onFinish,
+    }),
     [status, error, refresh, start, cancel, onFinish]
   );
 

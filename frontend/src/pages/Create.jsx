@@ -4,7 +4,7 @@ import * as studioApi from "../api/studio";
 import { STAGES, stageIndex, useGeneration } from "../GenerationContext";
 import { useToast } from "../ToastContext";
 import { StageSegments } from "../components/GenerationIndicator";
-import { IconAlert, IconArrowRight, IconCheck, IconInfo, IconShuffle, IconSparkle, IconStop, IconX } from "../components/icons";
+import { IconAlert, IconArrowRight, IconCheck, IconClock, IconInfo, IconShuffle, IconSparkle, IconStop, IconX } from "../components/icons";
 import StoryPoster, { PosterSkeleton } from "../components/StoryPoster";
 import StoryPreviewModal from "../components/StoryPreviewModal";
 import { Button, Callout, ConfirmDialog, ErrorState, Kbd } from "../components/ui";
@@ -215,6 +215,52 @@ function Developing() {
   );
 }
 
+function Queued() {
+  const { status, cancel } = useGeneration();
+  const { toast } = useToast();
+  const [cancelling, setCancelling] = useState(false);
+  const position = status.queue_position;
+
+  async function leave() {
+    setCancelling(true);
+    try {
+      const res = await cancel();
+      if (res?.cancelled === false) toast({ tone: "error", title: "Couldn’t leave the queue", description: res.message });
+      else toast({ title: "Left the queue" });
+    } catch (err) {
+      toast({ tone: "error", title: "Couldn’t leave the queue", description: err.message });
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  return (
+    <section className="developing panel" aria-labelledby="queued-title" aria-live="polite">
+      <div className="developing-head">
+        <span className="developing-live">
+          <IconClock aria-hidden="true" />
+          <span className="label" style={{ color: "var(--tungsten)" }}>Queued</span>
+        </span>
+        <span className="meta tabular">
+          {position ? `Position ${position} in line` : "Waiting for a slot"}
+        </span>
+      </div>
+
+      <h2 id="queued-title" className="developing-topic">
+        {status.topic ? <>“{status.topic}”</> : <span className="italic muted">A free pick — the archive decides.</span>}
+      </h2>
+
+      <div className="developing-foot">
+        <p className="muted" style={{ fontSize: "var(--text-sm)" }}>
+          Only one story generates at a time — another member's is running right now.
+          Yours starts the moment it's free.
+        </p>
+        <Button variant="danger" icon={IconStop} loading={cancelling} onClick={leave}>Leave queue</Button>
+      </div>
+    </section>
+  );
+}
+
 function LastRunNotice({ status, recent }) {
   const key = status?.finished_at ? `${status.status}-${status.finished_at}` : null;
   const [dismissed, dismiss] = useDismissed(key);
@@ -271,7 +317,7 @@ function LastRunNotice({ status, recent }) {
 
 export default function Create() {
   useDocumentTitle("Create");
-  const { status, running, onFinish, error: statusError, refresh: refreshStatus } = useGeneration();
+  const { status, running, queued, onFinish, error: statusError, refresh: refreshStatus } = useGeneration();
   const [recent, setRecent] = useState(null);
   const [recentError, setRecentError] = useState(null);
   const [previewStory, setPreviewStory] = useState(null);
@@ -319,6 +365,8 @@ export default function Create() {
           <div className="panel skeleton" style={{ height: 260 }} aria-hidden="true" />
         ) : running ? (
           <Developing />
+        ) : queued ? (
+          <Queued />
         ) : (
           <>
             <LastRunNotice status={status} recent={recent} />
@@ -332,7 +380,7 @@ export default function Create() {
           <div>
             <h2 id="recent-title" className="h2">Recently developed</h2>
             <p className="muted" style={{ fontSize: "var(--text-sm)", marginTop: 4 }}>
-              The latest stories from every member of the studio.
+              The latest stories you've developed.
             </p>
           </div>
           {pendingRecent > 0 && (

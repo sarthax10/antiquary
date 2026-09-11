@@ -7,7 +7,7 @@ from sqlalchemy.orm import relationship
 
 from .base import Base, utcnow
 
-VALID_JOB_STATUSES = ("running", "done", "error", "cancelled")
+VALID_JOB_STATUSES = ("queued", "running", "done", "error", "cancelled")
 
 
 class GenerationJob(Base):

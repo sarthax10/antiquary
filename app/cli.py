@@ -36,3 +36,25 @@ def register_cli(app: Flask) -> None:
 
         storage.ensure_bucket()
         click.echo(f"Bucket {storage.S3_BUCKET!r} ready at {storage.S3_ENDPOINT_URL}.")
+
+    @app.cli.command("migrate-video-keys")
+    def migrate_video_keys():
+        """One-off: renames existing MinIO objects from the old stories/<id>/video.mp4
+        layout to the user-namespaced stories/<user_id>/<id>/video.mp4 layout added
+        alongside per-user story ownership. Idempotent — safe to re-run."""
+        from app import storage
+        from app.db import get_session
+        from app.models import Story
+
+        session = get_session()
+        stories = session.query(Story).filter(Story.video_object_key.isnot(None)).all()
+        migrated = 0
+        for story in stories:
+            new_key = f"stories/{story.created_by_id}/{story.id}/video.mp4"
+            if story.video_object_key == new_key:
+                continue
+            storage.copy_video(story.video_object_key, new_key)
+            story.video_object_key = new_key
+            migrated += 1
+        session.commit()
+        click.echo(f"Migrated {migrated} video object key(s).")

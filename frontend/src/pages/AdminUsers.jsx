@@ -1,12 +1,77 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import * as adminApi from "../api/admin";
+import { ApiError } from "../api/client";
 import { useAuth } from "../AuthContext";
 import { useCounts } from "../CountsContext";
 import { useToast } from "../ToastContext";
-import { IconCheck, IconMembers, IconShield, IconUndo, IconX } from "../components/icons";
-import { Button, ConfirmDialog, EmptyState, ErrorState, PageHeader, Skeleton, Stamp } from "../components/ui";
+import { IconAlert, IconCheck, IconMembers, IconRefresh, IconShield, IconUndo, IconX } from "../components/icons";
+import { Button, ConfirmDialog, Dialog, EmptyState, ErrorState, PageHeader, PasswordField, Skeleton, Stamp } from "../components/ui";
 import { formatDateTime, initial, timeAgo } from "../lib/format";
 import { useDocumentTitle } from "../lib/hooks";
+
+// Mirrors app/auth/service.py MIN_PASSWORD_LENGTH.
+const MIN_PASSWORD = 10;
+
+function ResetPasswordDialog({ user, onClose, onDone }) {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const titleId = useId();
+  const ref = useRef(null);
+
+  useEffect(() => {
+    setPassword("");
+    setError(null);
+  }, [user]);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (submitting) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      const updated = await adminApi.resetPassword(user.id, password);
+      onDone(updated);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn’t reach the studio.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={!!user} onClose={onClose} labelledBy={titleId} initialFocusRef={ref}>
+      <form onSubmit={submit} className="auth-form" style={{ padding: 20, minWidth: 320 }}>
+        <h2 id={titleId} className="h2" style={{ fontSize: 16, marginBottom: 4 }}>Reset password</h2>
+        <p className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
+          Sets a new password for {user?.email} directly — share it with them yourself, there’s no email flow.
+        </p>
+        {error && (
+          <div className="callout callout-error" role="alert" style={{ marginBottom: 12 }}>
+            <IconAlert />
+            <div>{error}</div>
+            <span />
+          </div>
+        )}
+        <PasswordField
+          ref={ref}
+          label="New password"
+          name="new-password"
+          autoComplete="new-password"
+          required
+          minLength={MIN_PASSWORD}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          hint={`At least ${MIN_PASSWORD} characters`}
+        />
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" loading={submitting}>Set password</Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
 
 const TABS = [
   { key: "pending", label: "Requests", match: (u) => u.status === "pending" },
@@ -30,9 +95,17 @@ const CONFIRM = {
 
 const SUCCESS = { approved: "Access approved", rejected: "Request rejected", suspended: "Member suspended" };
 
-function MemberActions({ u, isSelf, busy, onSet }) {
-  if (isSelf) return <span className="badge badge-outline">You</span>;
+function MemberActions({ u, isSelf, busy, onSet, onToggleRole, onResetPassword }) {
   const b = (status) => busy === `${u.id}:${status}`;
+  const extra = u.status === "approved" && !isSelf && (
+    <>
+      <Button size="sm" variant="ghost" icon={IconShield} loading={b("role")} onClick={() => onToggleRole(u)}>
+        {u.role === "admin" ? "Remove admin" : "Make admin"}
+      </Button>
+      <Button size="sm" variant="ghost" icon={IconRefresh} onClick={() => onResetPassword(u)}>Reset password</Button>
+    </>
+  );
+  if (isSelf) return <span className="badge badge-outline">You</span>;
   switch (u.status) {
     case "pending":
       return (
@@ -44,6 +117,7 @@ function MemberActions({ u, isSelf, busy, onSet }) {
     case "approved":
       return (
         <>
+          {extra}
           <Button size="sm" variant="ghost" loading={b("rejected")} onClick={() => onSet(u, "rejected", true)}>Revoke</Button>
           {u.role !== "admin" && <Button size="sm" variant="danger" loading={b("suspended")} onClick={() => onSet(u, "suspended", true)}>Suspend</Button>}
         </>
@@ -67,6 +141,7 @@ export default function AdminUsers() {
   const [tab, setTab] = useState(null);
   const [busy, setBusy] = useState(null);
   const [confirm, setConfirm] = useState(null); // { user, status }
+  const [resetTarget, setResetTarget] = useState(null); // user whose password is being reset
 
   const load = useCallback(() => {
     setError(null);
@@ -114,6 +189,26 @@ export default function AdminUsers() {
   function onSet(u, status, needsConfirm) {
     if (needsConfirm) setConfirm({ user: u, status });
     else apply(u, status);
+  }
+
+  async function toggleRole(u) {
+    const role = u.role === "admin" ? "user" : "admin";
+    setBusy(`${u.id}:role`);
+    try {
+      const updated = await adminApi.setUserRole(u.id, role);
+      setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, ...updated } : x)));
+      toast({ tone: "success", title: role === "admin" ? "Now an admin" : "Admin removed", description: u.email });
+    } catch (err) {
+      toast({ tone: "error", title: "Change not saved", description: err.message });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function onPasswordReset(updated) {
+    setUsers((list) => list.map((x) => (x.id === updated.id ? { ...x, ...updated } : x)));
+    toast({ tone: "success", title: "Password reset", description: updated.email });
+    setResetTarget(null);
   }
 
   const pendingCount = byTab.pending?.length || 0;
@@ -193,7 +288,7 @@ export default function AdminUsers() {
                       </div>
                       <Stamp status={u.status}>{u.status}</Stamp>
                       <div className="member-actions">
-                        <MemberActions u={u} isSelf={isSelf} busy={busy} onSet={onSet} />
+                        <MemberActions u={u} isSelf={isSelf} busy={busy} onSet={onSet} onToggleRole={toggleRole} onResetPassword={setResetTarget} />
                       </div>
                     </li>
                   );
@@ -215,6 +310,8 @@ export default function AdminUsers() {
       >
         {confirm ? CONFIRM[confirm.status]?.body(confirm.user) : ""}
       </ConfirmDialog>
+
+      <ResetPasswordDialog user={resetTarget} onClose={() => setResetTarget(null)} onDone={onPasswordReset} />
     </>
   );
 }

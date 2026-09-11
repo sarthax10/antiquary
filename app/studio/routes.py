@@ -39,11 +39,11 @@ def list_stories():
     status = request.args.get("status")
     recent = request.args.get("recent", type=int)
     if recent:
-        stories = service.recent_stories(limit=recent)
+        stories = service.recent_stories(current_user, limit=recent)
     elif status == "pending":
-        stories = service.pending_stories()
+        stories = service.pending_stories(current_user)
     elif status in VALID_STORY_STATUSES:
-        stories = service.decided_stories(status)
+        stories = service.decided_stories(status, current_user)
     else:
         return jsonify(error="pass ?status=pending|approved|rejected or ?recent=N"), 400
     return jsonify(stories=[_story_json(s) for s in stories])
@@ -52,7 +52,7 @@ def list_stories():
 @bp.route("/stories/<story_id>")
 @approved_required
 def get_story(story_id):
-    story = service.get_story(story_id)
+    story = service.get_story(story_id, current_user)
     if story is None:
         return jsonify(error="not found"), 404
     return jsonify(story=_story_json(story, include_video_url=True))
@@ -61,7 +61,7 @@ def get_story(story_id):
 @bp.route("/stories/<story_id>/video")
 @approved_required
 def story_video(story_id):
-    story = service.get_story(story_id)
+    story = service.get_story(story_id, current_user)
     if story is None:
         return jsonify(error="not found"), 404
     if not story.video_object_key:
@@ -96,7 +96,7 @@ def decide_story(story_id):
 @bp.route("/stories/<story_id>/restore", methods=["POST"])
 @approved_required
 def restore_story(story_id):
-    story = service.restore_story(story_id)
+    story = service.restore_story(story_id, current_user)
     if story is None:
         return jsonify(error="not found"), 404
     return jsonify(story=_story_json(story))
@@ -114,11 +114,13 @@ def generate():
 @bp.route("/generate/cancel", methods=["POST"])
 @approved_required
 def generate_cancel():
-    cancelled, message = job_manager.cancel()
+    cancelled, message = job_manager.cancel(current_user)
+    if message == "forbidden":
+        return jsonify(error="You can only cancel your own generation."), 403
     return jsonify(cancelled=cancelled, message=message)
 
 
 @bp.route("/generate/status")
 @approved_required
 def generate_status():
-    return jsonify(job_manager.get_status())
+    return jsonify(job_manager.get_status(current_user))

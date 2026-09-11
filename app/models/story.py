@@ -32,7 +32,7 @@ class Story(Base):
     video_object_key = Column(String(300), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     decided_at = Column(DateTime(timezone=True), nullable=True)
-    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     decided_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     created_by = relationship("User", foreign_keys=[created_by_id])

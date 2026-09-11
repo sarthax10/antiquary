@@ -4,10 +4,18 @@ Flask process) so a crash or hang in generation can never take the API down with
 persists its state to a GenerationJob row so status survives a restart and is visible to
 every request — not just the one that started the job.
 
-Only one generation is ever allowed to run at a time — starting a second one while the
-first is still going wastes the CPU-bound local Ollama model's time twice over and was
-the direct cause of real failures earlier in this project (concurrent requests
-truncating each other's output). start() refuses if a live job is already running.
+Only one generation subprocess is ever running at a time — the CPU-bound local Ollama
+model can't usefully serve two requests at once (concurrent requests truncating each
+other's output was a real, confirmed failure mode earlier in this project). A second
+`start()` while one is already running no longer errors outright, though: it enqueues
+(status="queued") instead, and get_status() opportunistically promotes the oldest queued
+job to running once nothing is — piggybacking on the polling the frontend already does
+every 2.5s rather than needing a separate scheduler process.
+
+Status and cancellation are per-user, matching per-user story ownership (see
+app/studio/service.py) — a user sees and can cancel their own running/queued job (or an
+admin can cancel anyone's), not a shared global status, even though only one pipeline
+subprocess ever runs system-wide.
 
 Needs no Flask app/request context — only app.db's plain session — which is what lets
 set_stage() be called from inside the pipeline subprocess itself (a separate OS process
@@ -20,6 +28,8 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+from sqlalchemy.exc import IntegrityError
 
 from app.db import get_session
 from app.models import GenerationJob, utcnow
@@ -57,17 +67,29 @@ def _log_tail(n_chars: int = 800) -> str:
     return LOG_PATH.read_text(errors="replace")[-n_chars:]
 
 
-def _latest_job() -> GenerationJob | None:
+def _running_job() -> GenerationJob | None:
+    return get_session().query(GenerationJob).filter_by(status="running").first()
+
+
+def _queued_jobs() -> list[GenerationJob]:
     return (
         get_session().query(GenerationJob)
-        .order_by(GenerationJob.started_at.desc())
-        .first()
+        .filter_by(status="queued")
+        .order_by(GenerationJob.started_at.asc())
+        .all()
     )
 
 
-def _job_json(job: GenerationJob | None) -> dict:
+def _latest_job(user_id: int | None = None) -> GenerationJob | None:
+    query = get_session().query(GenerationJob)
+    if user_id is not None:
+        query = query.filter_by(user_id=user_id)
+    return query.order_by(GenerationJob.started_at.desc()).first()
+
+
+def _job_json(job: GenerationJob | None, queue_length: int = 0, queue_position: int | None = None) -> dict:
     if job is None:
-        return {"status": "idle"}
+        return {"status": "idle", "queue_length": queue_length}
     return {
         "status": job.status,
         "topic": job.topic,
@@ -77,21 +99,86 @@ def _job_json(job: GenerationJob | None) -> dict:
         "finished_at": job.finished_at.timestamp() if job.finished_at else None,
         "error": job.error,
         "story_id": job.resulting_story_id,
+        "queue_length": queue_length,
+        "queue_position": queue_position,
     }
 
 
-def get_status() -> dict:
-    """Self-heals if a tracked process died without the watcher thread updating it
-    (e.g. the app itself was restarted mid-generation)."""
+def _spawn(job: GenerationJob) -> None:
+    """Launches the pipeline subprocess for an already-`running` job row. Shared by
+    start() (spawning immediately) and get_status() (promoting a queued job)."""
+    global _current_proc
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = open(LOG_PATH, "w")
+    env = os.environ.copy()
+    env["GENERATION_JOB_ID"] = str(job.id)
+    if job.user_id is not None:
+        env["GENERATION_USER_ID"] = str(job.user_id)
+    proc = subprocess.Popen(
+        [sys.executable, "run_pipeline.py", job.topic],
+        cwd=str(PIPELINE_DIR),
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        env=env,
+    )
+    _current_proc = proc
+    job.pid = proc.pid
+    get_session().commit()
+    threading.Thread(target=_watch, args=(proc, job.id), daemon=True).start()
+
+
+def _queue_position(job: GenerationJob) -> int:
+    """1-based position among currently queued jobs, oldest first."""
+    return 1 + (
+        get_session().query(GenerationJob)
+        .filter(GenerationJob.status == "queued", GenerationJob.started_at < job.started_at)
+        .count()
+    )
+
+
+def get_status(user=None) -> dict:
+    """Self-heals a crashed running job and promotes the oldest queued job once nothing
+    is running. With `user`, reports that user's own running/queued job (or their most
+    recent finished one) plus the global queue depth; without one (internal callers),
+    reports whichever job is running."""
     session = get_session()
-    job = _latest_job()
-    if job is not None and job.status == "running":
-        if not job.pid or not _pid_alive(job.pid):
-            job.status = "error"
-            job.error = "Generation process ended unexpectedly (was the app restarted mid-run?)."
-            job.finished_at = utcnow()
-            session.commit()
-    return _job_json(job)
+    running = _running_job()
+    if running is not None and (not running.pid or not _pid_alive(running.pid)):
+        running.status = "error"
+        running.error = "Generation process ended unexpectedly (was the app restarted mid-run?)."
+        running.finished_at = utcnow()
+        session.commit()
+        running = None
+
+    if running is None:
+        queued = _queued_jobs()
+        if queued:
+            job = queued[0]
+            job.status = "running"
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()  # lost a race — someone else's job is running now
+            else:
+                _spawn(job)
+                running = job
+
+    queue_length = get_session().query(GenerationJob).filter_by(status="queued").count()
+
+    if user is None:
+        return _job_json(running, queue_length=queue_length)
+
+    mine = (
+        get_session().query(GenerationJob)
+        .filter(GenerationJob.user_id == user.id, GenerationJob.status.in_(("queued", "running")))
+        .order_by(GenerationJob.started_at.asc())
+        .first()
+    )
+    if mine is not None:
+        position = _queue_position(mine) if mine.status == "queued" else None
+        return _job_json(mine, queue_length=queue_length, queue_position=position)
+
+    return _job_json(_latest_job(user.id), queue_length=queue_length)
 
 
 def set_stage(stage_key: str) -> None:
@@ -133,42 +220,58 @@ def _watch(proc: subprocess.Popen, job_id: int) -> None:
 
 
 def start(topic: str, user) -> tuple[bool, str]:
-    """Returns (started, message). Refuses if a generation is already running."""
+    """Returns (started, message). Enqueues (status="queued") instead of refusing when a
+    generation is already running — get_status() promotes the oldest queued job once
+    nothing is. Refuses only if this same user already has a running or queued job of
+    their own (one at a time per user, not one at a time globally-with-no-queue)."""
     global _current_proc
     with _lock:
-        if get_status().get("status") == "running":
-            return False, "A generation is already running."
-
         session = get_session()
-        job = GenerationJob(user_id=user.id if user else None, topic=topic, status="running")
-        session.add(job)
-        session.commit()  # need job.id before spawning, so the subprocess can report to it
-
-        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        log_fh = open(LOG_PATH, "w")
-        env = os.environ.copy()
-        env["GENERATION_JOB_ID"] = str(job.id)
         if user is not None:
-            env["GENERATION_USER_ID"] = str(user.id)
-        proc = subprocess.Popen(
-            [sys.executable, "run_pipeline.py", topic],
-            cwd=str(PIPELINE_DIR),
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            env=env,
-        )
-        _current_proc = proc
-        job.pid = proc.pid
-        session.commit()
+            existing = (
+                session.query(GenerationJob)
+                .filter(GenerationJob.user_id == user.id, GenerationJob.status.in_(("queued", "running")))
+                .first()
+            )
+            if existing is not None:
+                return False, "You already have a generation running or queued."
 
-        threading.Thread(target=_watch, args=(proc, job.id), daemon=True).start()
+        # Join the back of the queue whenever anything is running OR already queued —
+        # not just when something is running. Otherwise a new job could jump ahead of an
+        # earlier queued one that just hasn't been promoted by get_status() yet (e.g.
+        # nobody has polled status since the previous job finished).
+        blocked = _running_job() is not None or bool(_queued_jobs())
+        job = GenerationJob(user_id=user.id if user else None, topic=topic, status="queued" if blocked else "running")
+        session.add(job)
+        try:
+            session.commit()  # need job.id before spawning, so the subprocess can report to it
+        except IntegrityError:
+            # Lost a race with another request that started running first (defense in
+            # depth — with gunicorn's single worker this shouldn't actually happen).
+            session.rollback()
+            job = GenerationJob(user_id=user.id if user else None, topic=topic, status="queued")
+            session.add(job)
+            session.commit()
+
+        if job.status != "running":
+            return True, f"queued (position {_queue_position(job)})"
+
+        _spawn(job)
         return True, "started"
 
 
-def cancel() -> tuple[bool, str]:
-    """Terminates the running generation (SIGTERM, escalating to SIGKILL after a short
-    grace period) and marks it "cancelled" — distinct from "error" so the UI can tell a
-    crash apart from a deliberate stop.
+def cancel(user) -> tuple[bool, str]:
+    """Cancels the caller's own job first — their running one (SIGTERM, escalating to
+    SIGKILL after a short grace period) if they have one, else their oldest queued one,
+    which is just a status flip since it was never spawned. Only once the caller has
+    nothing of their own to cancel does an admin's bypass kick in, letting them stop
+    someone else's running job. Returns (cancelled, message); message is "forbidden"
+    when a non-admin tries to touch a running job that isn't theirs.
+
+    The caller's own job is checked before the admin bypass deliberately: an admin who
+    queued behind someone else's job and clicks "leave queue" must cancel their own
+    queued entry, not reach for admin privileges and kill the other person's running
+    job instead — an earlier version got this backwards.
 
     Normally operates on the in-memory Popen handle (_current_proc), which lets it reap
     the child cleanly via proc.wait(). That handle only exists in the process that
@@ -179,44 +282,57 @@ def cancel() -> tuple[bool, str]:
     global _current_proc
     with _lock:
         session = get_session()
-        job = _latest_job()
-        proc = _current_proc
-        if job is None or job.status != "running":
-            return False, "Nothing is running."
-        pid = job.pid
-        if proc is None and not (pid and _pid_alive(pid)):
-            return False, "Nothing is running."
+        running = _running_job()
+        owns_running = running is not None and (running.user_id is None or running.user_id == user.id)
 
-        if proc is not None:
-            try:
-                proc.terminate()
-                proc.wait(timeout=4)
-            except subprocess.TimeoutExpired:
+        queued_mine = (
+            session.query(GenerationJob)
+            .filter(GenerationJob.user_id == user.id, GenerationJob.status == "queued")
+            .order_by(GenerationJob.started_at.asc())
+            .first()
+        )
+        if not owns_running and queued_mine is not None:
+            queued_mine.status = "cancelled"
+            queued_mine.finished_at = utcnow()
+            session.commit()
+            return True, "cancelled"
+
+        if owns_running or (running is not None and user.is_admin):
+            proc = _current_proc
+            pid = running.pid
+            if proc is not None:
                 try:
-                    proc.kill()
-                    proc.wait(timeout=2)
-                except Exception:
+                    proc.terminate()
+                    proc.wait(timeout=4)
+                except subprocess.TimeoutExpired:
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=2)
+                    except Exception:
+                        pass
+                except ProcessLookupError:
                     pass
-            except ProcessLookupError:
-                pass
-        else:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except (OSError, ProcessLookupError):
-                pass
-            for _ in range(20):  # ~4s grace period
-                if not _pid_alive(pid):
-                    break
-                time.sleep(0.2)
-            if _pid_alive(pid):
+            elif pid:
                 try:
-                    os.kill(pid, signal.SIGKILL)
+                    os.kill(pid, signal.SIGTERM)
                 except (OSError, ProcessLookupError):
                     pass
+                for _ in range(20):  # ~4s grace period
+                    if not _pid_alive(pid):
+                        break
+                    time.sleep(0.2)
+                if _pid_alive(pid):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except (OSError, ProcessLookupError):
+                        pass
+            running.status = "cancelled"
+            running.finished_at = utcnow()
+            running.error = None
+            session.commit()
+            _current_proc = None
+            return True, "cancelled"
 
-        job.status = "cancelled"
-        job.finished_at = utcnow()
-        job.error = None
-        session.commit()
-        _current_proc = None
-        return True, "cancelled"
+        if running is not None:
+            return False, "forbidden"
+        return False, "Nothing is running."
