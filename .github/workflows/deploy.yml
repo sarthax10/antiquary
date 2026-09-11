@@ -15,6 +15,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore .env
+        # .env is git-ignored (it holds live secrets) and actions/checkout starts from a
+        # clean tree every run, so it never exists in this checkout on its own. It's kept
+        # persistently at ~/antiquary/.env (outside this runner's _work tree, so it
+        # survives every run's cleanup) — see docs/SERVER_SETUP.md step 8. Copy it in
+        # before anything that needs it.
+        run: cp "$HOME/antiquary/.env" .env
+
       - name: Build frontend
         working-directory: frontend
         run: |
