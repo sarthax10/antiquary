@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ app/
 COPY pipeline/ pipeline/
 COPY migrations/ migrations/
+COPY tests/ tests/
 COPY alembic.ini wsgi.py ./
 
 ENV PYTHONUNBUFFERED=1

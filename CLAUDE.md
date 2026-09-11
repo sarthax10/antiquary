@@ -38,13 +38,19 @@ This project has no dependency on Anthropic/Claude at runtime at all.
 - `frontend/` — React (Vite), the entire UI. Talks to `app/` only via
   `frontend/src/api/*` fetch wrappers. Cookie-based session auth (Flask-Login), CSRF via
   an `X-CSRFToken` header fetched from `/api/auth/csrf`.
-- `pipeline/` — the actual video generation (Ollama script writing + fact-check →
-  Wikimedia/Pexels visuals → edge-tts narration → faster-whisper captions → ffmpeg
-  render). Fully independent of Flask; only needs `DATABASE_URL`/`S3_*` env vars.
-  `run_pipeline.py` is spawned as a subprocess by `app/generation/job_manager.py`.
+- `pipeline/` — the actual video generation (Ollama script writing + fact-check, split
+  into ordered "beats" → Wikidata/Wikimedia/Pexels visuals per beat → edge-tts narration
+  per beat → faster-whisper captions → ffmpeg render). Fully independent of Flask; only
+  needs `DATABASE_URL`/`S3_*` env vars. `run_pipeline.py` is spawned as a subprocess by
+  `app/generation/job_manager.py`. See docs/ARCHITECTURE.md for how beats tie sourcing,
+  narration timing and render cuts together.
 - Data lives in **Postgres** (`app/models/`: `User`, `Story`, `GenerationJob`) and
-  **MinIO** (S3-compatible; rendered videos). Nothing is stored as loose JSON files
+  **MinIO** (S3-compatible; rendered videos, namespaced per user —
+  `stories/<user_id>/<story_id>/video.mp4`). Nothing is stored as loose JSON files
   anymore — that was the pre-multi-user design and has been fully migrated away from.
+  Every `Story` belongs to exactly one user (`created_by_id`); non-admins only see and
+  can act on their own, admins see/act on everyone's — see docs/ARCHITECTURE.md's
+  "Ownership model" for the enforcement details.
 
 ## Key decisions and their reasoning (don't relitigate these without a real reason)
 
@@ -58,15 +64,24 @@ This project has no dependency on Anthropic/Claude at runtime at all.
 - **No click-to-highlight linking between fact-check claims and narration text.** Claims
   are LLM-paraphrased, not verbatim substrings of the narration — a highlight-matching
   feature here would be unreliable/misleading, not just unfinished.
-- **One generation globally at a time.** Concurrent Ollama requests on this CPU-bound
-  single-instance setup were the direct, confirmed cause of real failures earlier in
-  this project (truncated/malformed output). `job_manager.start()` refuses a second job
-  while one is running. If you ever add a real job queue for concurrency, keep this
-  constraint until you've verified the underlying Ollama contention issue is actually
-  solved (e.g. multiple model instances, more RAM/CPU).
+- **One generation subprocess at a time, but a real FIFO queue now, not a rejection.**
+  Concurrent Ollama requests on this CPU-bound single-instance setup were the direct,
+  confirmed cause of real failures earlier in this project (truncated/malformed output),
+  so that constraint stays — but `job_manager.start()` now enqueues a second request
+  (`status="queued"`) instead of erroring, and `get_status()` promotes the oldest queued
+  job once nothing is running. Don't relax the one-subprocess-at-a-time part until
+  you've verified the underlying Ollama contention issue is actually solved (e.g.
+  multiple model instances, more RAM/CPU).
 - **Cookie session auth, not JWT**, because the SPA is served same-origin (Caddy proxies
   both `/api/*` and the built frontend) — an HttpOnly cookie can't be read by JS at all,
   which is strictly safer against XSS than a token sitting in `localStorage`.
+- **`ADMIN_EMAIL`/`ADMIN_PASSWORD` are bootstrap-only.** `seed-admin` uses them once to
+  create the first admin row; after that the DB is the only source of truth, same as any
+  other user — `POST /api/auth/change-password` (self-service) and
+  `POST /api/admin/users/<id>/reset-password` (admin-initiated, for a member who's lost
+  access) are the real way to change a password from then on. Don't reintroduce
+  "edit `.env` to change a password" anywhere — that was the actual bug this fixed, not
+  a deliberate design choice worth preserving.
 - **Fact-checking is a second, independent LLM pass, not a web search.** It catches
   internal inconsistencies and claims the model itself is unsure about, but a small
   local model can and does confidently confirm its own hallucinations sometimes. Treat
@@ -81,15 +96,19 @@ This project has no dependency on Anthropic/Claude at runtime at all.
 
 - No email verification on signup — admin approval is the only gate. Fine for the
   current trust model; revisit if that changes.
-- Rate limiting (`Flask-Limiter`) uses in-memory storage — fine for the current
-  single-`app`-container deployment, but won't share state if you ever scale to
-  multiple app instances. Would need a Redis backend at that point.
+- Rate limiting (`Flask-Limiter`) uses in-memory storage, which only stays correct
+  because gunicorn runs a single worker process (`docker-compose.yml`, `--workers 1
+  --worker-class gthread --threads 4`) — the same fix that makes `job_manager`'s
+  in-process lock actually span every request. If you ever need multiple worker
+  *processes* (not threads) for real request-handling concurrency, both of these need a
+  shared backend (Redis for the limiter; the DB-level partial unique index already
+  backs the job invariant independently of the in-process lock) — don't just bump
+  `--workers` without addressing that.
 - No publish-to-YouTube/Instagram step yet — "Approved" stops at making a story
   eligible; nothing in this repo actually posts anywhere.
-- No automated test suite exists yet. Verification so far has been manual/live
-  (curl'ing the API, driving the React app in a real browser) — thorough, but not
-  regression-proof. Worth adding `tests/` mirroring `app/`'s structure if this keeps
-  growing.
+- `tests/` covers the security-critical/new logic (ownership scoping, the generation
+  queue, the beat-grouping math) — not a full retrofit of everything else. It runs
+  against the real `DATABASE_URL` (see `tests/conftest.py`), not a separate test DB.
 
 ## Local dev setup
 

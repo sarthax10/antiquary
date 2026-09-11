@@ -10,10 +10,16 @@ id> first — every story now belongs to a user, see app/studio/service.py). Rep
 progress via job_manager.set_stage() at each genuine step — not a simulated timer.
 Fully independent of Flask: only needs DATABASE_URL/S3_* env vars (see .env.example),
 not the web app running.
+
+Beats (generate_script.py) are the spine everything else hangs off: fetch_visuals.py
+sources one asset per beat (a named person's actual portrait for a "person" beat, not a
+generic stock photo), tts.py synthesizes each beat's narration as its own clip so its
+real duration is known exactly, and render.py cuts to a new visual exactly when that
+beat's own audio starts — no more "images shown on a flat fraction of total runtime
+unrelated to what's being said."
 """
 import asyncio
 import json
-import os
 import sys
 import uuid
 from pathlib import Path
@@ -44,21 +50,31 @@ def run(topic: str) -> str:
 
     job_manager.set_stage("sourcing_visuals")
     visuals_dir = work_dir / "visuals"
-    fetch_visuals.fetch_all(str(visuals_dir), script["visual_queries"])
-    media = sorted(str(p) for p in visuals_dir.glob("img_*"))
+    assets = fetch_visuals.fetch_all(str(visuals_dir), script["beats"])
 
     job_manager.set_stage("recording_narration")
+    audio_dir = work_dir / "audio"
+    beat_audio = asyncio.run(tts.synthesize_beats(script["beats"], audio_dir, tts.DEFAULT_VOICE))
     narration_path = work_dir / "narration.mp3"
-    asyncio.run(tts.synthesize(script["narration"], str(narration_path), tts.DEFAULT_VOICE))
+    tts.concat_audio([b["path"] for b in beat_audio], str(narration_path))
 
     job_manager.set_stage("generating_captions")
     words = captions.transcribe_words(str(narration_path))
     ass_path = work_dir / "captions.ass"
-    captions.build_ass(words, str(ass_path))
+    captions.build_ass(words, str(ass_path), title=script.get("title"))
 
     job_manager.set_stage("rendering")
     video_path = work_dir / "final.mp4"
-    render.render(str(narration_path), str(ass_path), str(video_path), media)
+    beats_final = [
+        {
+            "path": asset["path"],
+            "entity_type": asset["entity_type"],
+            "face": asset["face"],
+            "duration": audio["duration"],
+        }
+        for asset, audio in zip(assets, beat_audio)
+    ]
+    render.render(str(narration_path), str(ass_path), str(video_path), beats_final)
 
     return enqueue_story.enqueue(str(video_path), str(script_path), topic)
 

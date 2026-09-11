@@ -2,6 +2,7 @@ edge-tts
 faster-whisper
 requests
 pillow
+opencv-python-headless
 flask
 python-dotenv
 
@@ -14,3 +15,7 @@ alembic
 psycopg2-binary
 boto3
 gunicorn
+
+# Tests only (tests/) — not a separate requirements-dev.txt, this project doesn't split
+# dev/runtime deps anywhere else either.
+pytest

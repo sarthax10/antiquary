@@ -23,7 +23,10 @@ class Story(Base):
     title = Column(String(300), nullable=False, default="")
     hook = Column(Text, nullable=False, default="")
     narration = Column(Text, nullable=False, default="")
-    visual_queries = Column(JSONB, nullable=False, default=list)
+    # Ordered {"text","visual_query","entity_type"} segments the narration was split
+    # into for visual sourcing/render timing — see pipeline/generate_script.py. Kept for
+    # provenance (why THIS image was chosen for THIS beat); not surfaced via the API.
+    beats = Column(JSONB, nullable=False, default=list)
     fact_check = Column(JSONB, nullable=False, default=dict)
     needs_human_review = Column(Boolean, nullable=False, default=True)
     status = Column(String(16), nullable=False, default="pending", index=True)

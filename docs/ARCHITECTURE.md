@@ -45,6 +45,25 @@ React components  →  API client  →  Flask routes (JSON in/out)  →  service
   `app.generation.job_manager.set_stage()` — that module is the one sanctioned bridge,
   since it needs no Flask app/request context (see its docstring), only a DB session.
 
+## Ownership model (explicit, not just implied by the UI)
+
+Every `Story` belongs to exactly one user (`created_by_id`, `NOT NULL`, indexed). A
+non-admin can only read/stream/decide/restore/cancel-generation-of their own stories;
+`app/studio/service.py`'s `_scoped()` helper (and `get_story()`'s inline check) enforce
+this on every query, not just the list views. An admin bypasses the check entirely —
+this is deliberate oversight, the same trust boundary that already lets admins approve
+signups — not an oversight-shaped bug. MinIO object keys are namespaced the same way:
+`stories/<user_id>/<story_id>/video.mp4`.
+
+Generation is a small FIFO queue (`app/generation/job_manager.py`), not "one job
+globally or an instant rejection": a second `start()` while one is running enqueues
+(`status="queued"`), and `get_status()` — already polled by the frontend every 2.5s —
+opportunistically promotes the oldest queued job once nothing is running. A DB-level
+partial unique index (`generation_jobs` where `status='running'`) backs the "one running
+job" invariant regardless of process/thread races; gunicorn itself runs a single worker
+(with threads) so that invariant and Flask-Limiter's rate-limit store are both correct
+without needing Redis.
+
 ## Package layout
 
 ```
@@ -83,8 +102,22 @@ frontend/                    React SPA (Vite), the entire UI — talks to app/ o
   e2e/                       optional mock API + Playwright smoke flows (not part of the build)
 
 pipeline/                    video generation, independent of the web app
+  generate_script.py          Ollama writer + fact-check passes; splits narration into
+                               ordered "beats" ({text, visual_query, entity_type}) that
+                               fetch_visuals.py, tts.py and render.py all key off
+  fetch_visuals.py             one asset per beat — a named person's actual portrait
+                               (Wikidata P18) before any generic stock fallback
+  tts.py                       one narration clip per beat (exact per-beat duration,
+                               no approximation), concatenated for the full track
+  captions.py                  word-level captions + the on-screen title card, both
+                               burned in via the same .ass/libass pass
+  render.py                    per-beat cut timing, face-aware Ken Burns, grade/grain,
+                               optional ducked music bed
 migrations/                  Alembic
-docs/                        this file, DEPLOYMENT.md
+docs/                        this file, DEPLOYMENT.md, SERVER_SETUP.md
+tests/                        pytest — ownership scoping, the generation queue, and the
+                               beat-grouping math; runs against the real DATABASE_URL
+                               (see tests/conftest.py), no separate test-DB infra
 wsgi.py                      gunicorn entrypoint: `from app import create_app; app = create_app()`
 ```
 

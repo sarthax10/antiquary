@@ -3,9 +3,21 @@
 separate fact-check pass over its claims before returning it.
 
 Usage: generate_script.py "<topic or leave blank for a free pick>"
-Prints JSON: {"title", "hook", "narration", "on_screen_text",
+Prints JSON: {"title", "hook", "narration",
+              "beats": [{"text", "visual_query", "entity_type"}, ...],
               "fact_check": {"claims": [...], "overall_confidence"},
               "needs_human_review": bool}
+
+"beats" is the narration split into ordered visual segments — each beat's "text" is an
+exact, contiguous slice of "narration" (concatenating every beat's text in order
+reconstructs it exactly), paired with a search query and an entity_type
+("person"/"place"/"artifact"/"event"/"scene") that downstream visual sourcing
+(fetch_visuals.py) and render timing (render.py, via captions.py's word-timestamp
+recovery) both key off. Getting the LLM to name specific people/places/events per beat
+rather than one flat per-video keyword list is what lets sourcing fetch an actual named
+person's portrait instead of a generic stock photo, and what lets the renderer cut to a
+new image on the actual sentence it's relevant to instead of a fixed fraction of the
+total runtime.
 
 IMPORTANT: this fact-check is a second LLM pass, not a search against real
 sources. It catches some internal inconsistencies and claims the model itself
@@ -17,6 +29,7 @@ track record.
 """
 import json
 import os
+import re
 import sys
 import time
 import requests
@@ -31,29 +44,60 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 # silently sending model="" to Ollama (which 400s with "model is required").
 FACTCHECK_MODEL = os.environ.get("OLLAMA_FACTCHECK_MODEL") or OLLAMA_MODEL
 
+ENTITY_TYPES = ("person", "place", "artifact", "event", "scene")
+
 WRITER_SYSTEM_PROMPT = """You write scripts for 30-45 second vertical history short-form videos \
 (Instagram Reels / YouTube Shorts). Pick ONE narrow, specific, surprising true historical \
 detail or story — not a generic "5 facts about X" list. Write for a viewer who will decide \
-whether to keep watching within the first 2 seconds.
+whether to keep watching within the first 2 seconds — both platforms' algorithms weight early \
+retention above almost everything else, so the opening line has to work as a genuine \
+pattern-interrupt, not a slow windup.
 
 Return ONLY valid JSON with these keys:
-- "title": short internal title (not shown on screen)
-- "hook": the first spoken line, must create curiosity or tension immediately, max 15 words
+- "title": a punchy, scroll-stopping title using a proven pattern — a curiosity gap \
+("The King Who Vanished"), a contrarian claim ("Everything About the Tea Party Is Wrong"), or a \
+number-plus-surprising-detail ("The Ship That Sailed Itself"). Under 45 characters — it's shown \
+both in the app and as a two-line on-screen title card at the very start of the video, so it \
+must be short enough to read at a glance and still read as a complete, sensible phrase on its \
+own, not a clickbait fragment.
+- "hook": the first spoken line, a genuine pattern-interrupt — an emotional trigger, a direct \
+question, or a contrarian claim that forces the viewer to keep watching to resolve it. Max 15 \
+words.
 - "narration": the full spoken script including the hook, 70-110 words, punchy, plain spoken \
-English, no headers or bullet points, written to be read aloud in ~35-45 seconds
-- "on_screen_text": a list of 4-8 short caption fragments (3-6 words each) pulled from the \
-narration, in order, for on-screen text overlays
+English, written in complete sentences (this gets split into sentences programmatically \
+afterward, so normal sentence-ending punctuation matters), no headers or bullet points, written \
+to be read aloud in ~35-45 seconds
 No commentary, no markdown, just the JSON object."""
 
-VISUAL_QUERIES_SYSTEM_PROMPT = """You will be given the narration script for a short video. Break \
-it into 4-6 short image/video search phrases (3-6 words each), IN NARRATION ORDER, each naming one \
-concrete, specific, findable thing to show on screen while that part of the narration plays — a \
-real person, place, artifact, painting, building, or event, specific enough to find an actual \
-archival image, painting, or stock footage clip of it (e.g. "Augustus marble statue", "Roman forum \
-ruins", "ancient Roman villa fresco" — not vague phrases like "ancient times" or "history concept").
+BEATS_SYSTEM_PROMPT = """You will be given a video narration script, split into numbered \
+sentences. Group the sentences into visual "beats" that together cover every sentence exactly \
+once, in order. A single beat covering the ENTIRE narration is WRONG even if the topic doesn't \
+change — a viewer needs to see something different on screen every few seconds, not one static \
+image for the whole video. Use AT LEAST 3 beats, ideally 4-6, even for a short, single-topic \
+narration: split by sentence if nothing else changes, not by subject. Never skip a sentence or \
+put them out of order.
 
-Return ONLY valid JSON: {"visual_queries": ["...", "...", ...]}
-No commentary, no markdown, just the JSON object."""
+For each beat, name one concrete, specific, findable thing to show on screen while that beat \
+plays, and return:
+- "sentences": the sentence numbers in this beat, consecutive and in increasing order (e.g. [1,2])
+- "visual_query": a 3-6 word image/video search phrase for this beat — a real person, place, \
+artifact, painting, building, or event, specific enough to find an actual photo, portrait, \
+painting, or stock footage clip of it (e.g. "Augustus marble statue", "Roman forum ruins" — \
+never vague phrases like "ancient times" or "history concept")
+- "entity_type": one of "person", "place", "artifact", "event", "scene" — use "person" ONLY when \
+the visual_query names a specific real individual whose actual likeness/portrait should be \
+shown, not a generic or anonymous figure
+
+Example, for a 6-sentence narration all about the same person: \
+{"beats": [{"sentences": [1], "visual_query": "Marie Curie portrait", "entity_type": "person"}, \
+{"sentences": [2,3], "visual_query": "Curie laboratory Paris", "entity_type": "place"}, \
+{"sentences": [4], "visual_query": "radium glowing vial", "entity_type": "artifact"}, \
+{"sentences": [5,6], "visual_query": "Nobel Prize ceremony 1903", "entity_type": "event"}]} \
+— four beats, one static subject, still four different things shown on screen.
+
+Return ONLY valid JSON: {"beats": [{"sentences": [...], "visual_query": "...", "entity_type": "..."}, ...]}
+Every sentence number from 1 up to the last one must appear in exactly one beat, covering all of \
+them in increasing order across beats. No commentary, no markdown, just the JSON object."""
 
 FACTCHECK_SYSTEM_PROMPT = """You are a skeptical historical fact-checker. You will be given a \
 narration script for a short video. You did not write it and have no reason to defend it.
@@ -101,20 +145,100 @@ def _chat_json(host: str, model: str, system_prompt: str, user_prompt: str, max_
     raise last_error
 
 
-REQUIRED_SCRIPT_KEYS = {"title", "hook", "narration", "on_screen_text"}
+REQUIRED_SCRIPT_KEYS = {"title", "hook", "narration"}
+
+# Splits on sentence-ending punctuation followed by whitespace and a capital letter/quote —
+# good enough for short, plainly-punctuated narration prose without pulling in a full NLP
+# dependency. Falls back to treating the whole narration as one sentence if this matches nothing.
+_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"‘“])")
+
+
+def split_sentences(narration: str) -> list[str]:
+    text = (narration or "").strip()
+    if not text:
+        return []
+    parts = [p.strip() for p in _SENTENCE_RE.split(text) if p.strip()]
+    return parts or [text]
+
+
+def _validate_beat_groups(raw_beats, n_sentences: int) -> list[list[int]] | None:
+    """Returns 0-based sentence-index groups if raw_beats' "sentences" lists are
+    contiguous, ordered, and cover every sentence exactly once — otherwise None."""
+    groups = []
+    covered = 0
+    for b in raw_beats:
+        nums = b.get("sentences") if isinstance(b, dict) else None
+        if not isinstance(nums, list) or not nums:
+            return None
+        idx = [n - 1 for n in nums]
+        if idx != list(range(covered, covered + len(idx))):
+            return None
+        groups.append(idx)
+        covered += len(idx)
+    return groups if covered == n_sentences else None
+
+
+def _even_groups(n_sentences: int, target_beats: int = 5) -> list[list[int]]:
+    n_beats = max(1, min(target_beats, n_sentences))
+    base, extra = divmod(n_sentences, n_beats)
+    groups, start = [], 0
+    for i in range(n_beats):
+        size = base + (1 if i < extra else 0)
+        groups.append(list(range(start, start + size)))
+        start += size
+    return groups
+
+
+def _beats_from_groups(sentences: list[str], groups: list[list[int]], raw_beats: list[dict]) -> list[dict] | None:
+    beats = []
+    for group, meta in zip(groups, raw_beats):
+        text = " ".join(sentences[i] for i in group)
+        query = (meta.get("visual_query") or "").strip()
+        entity_type = meta.get("entity_type") if meta.get("entity_type") in ENTITY_TYPES else "scene"
+        beats.append({"text": text, "visual_query": query or text[:60], "entity_type": entity_type})
+    return beats if all(b["visual_query"] for b in beats) else None
+
+
+def write_beats(sentences: list[str], max_attempts: int = 3) -> list[dict]:
+    """Groups the (already Python-split, exact) sentences into visual beats. Never
+    trusts the LLM to reproduce narration text — only to partition sentence *numbers*,
+    which is validated. The model demonstrably can do this correctly but isn't
+    consistent about it, so a bad attempt (wrong beat count, non-contiguous ranges) is
+    worth a couple of fresh retries before giving up to the deterministic even-split
+    fallback, which loses per-beat entity_type/query quality (no more "person" detection
+    for that beat, just its own truncated sentence text as a generic search query)."""
+    numbered = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(sentences))
+    min_beats = min(3, len(sentences))
+
+    for _ in range(max_attempts):
+        try:
+            result = _chat_json(OLLAMA_HOST, OLLAMA_MODEL, BEATS_SYSTEM_PROMPT, numbered)
+        except (requests.exceptions.RequestException, json.JSONDecodeError):
+            continue
+        raw_beats = result.get("beats") or []
+        groups = _validate_beat_groups(raw_beats, len(sentences))
+        # A grouping that's merely *structurally* valid (contiguous, ordered, full
+        # coverage) can still be a single beat spanning the whole narration if the model
+        # ignores the "4-6 beats" instruction — technically valid, but exactly the
+        # one-image-for-the-whole-video problem this beat system exists to fix.
+        if groups is not None and len(groups) >= min_beats:
+            beats = _beats_from_groups(sentences, groups, raw_beats)
+            if beats is not None:
+                return beats
+
+    return [
+        {
+            "text": (text := " ".join(sentences[i] for i in group)),
+            "visual_query": text[:60],
+            "entity_type": "scene",
+        }
+        for group in _even_groups(len(sentences))
+    ]
 
 
 def write_script(topic: str) -> dict:
     user_prompt = f"Topic seed: {topic}" if topic else "Pick any narrow, surprising true historical story."
     return _chat_json(OLLAMA_HOST, OLLAMA_MODEL, WRITER_SYSTEM_PROMPT, user_prompt)
-
-
-def write_visual_queries(narration: str) -> list[str]:
-    result = _chat_json(OLLAMA_HOST, OLLAMA_MODEL, VISUAL_QUERIES_SYSTEM_PROMPT, narration)
-    queries = result.get("visual_queries")
-    if not queries:
-        raise ValueError("visual_queries output missing or empty")
-    return queries
 
 
 def fact_check(narration: str) -> dict:
@@ -125,15 +249,15 @@ def generate(topic: str, max_attempts: int = 4, on_stage=None) -> dict:
     """A small local model occasionally: (a) returns JSON missing expected keys despite
     format="json" only guaranteeing valid JSON syntax, not our schema (more likely the
     larger/more the schema asks for in one call — so this is split into three focused
-    calls: core script, then visual_queries derived from the finalized narration, then
+    calls: core script, then beats derived from the finalized narration, then
     fact-check), or (b) writes content that deterministically fails Ollama's json-mode
     grammar on a later call (retrying the *same* content doesn't help — regenerating does,
     since that's content-dependent, not a transient network blip). So on any failure,
     regenerate the whole script from scratch rather than retry the same broken output.
 
-    `on_stage`, if given, is called with "writing" before the writer/visual-queries calls
-    and "fact_checking" before the fact-check call — real progress reporting for the UI,
-    not a simulated timer. Optional so this module has no hard dependency on the caller."""
+    `on_stage`, if given, is called with "writing" before the writer/beats calls and
+    "fact_checking" before the fact-check call — real progress reporting for the UI, not
+    a simulated timer. Optional so this module has no hard dependency on the caller."""
     last_error = None
     for attempt in range(max_attempts):
         try:
@@ -142,7 +266,8 @@ def generate(topic: str, max_attempts: int = 4, on_stage=None) -> dict:
             script = write_script(topic)
             if not REQUIRED_SCRIPT_KEYS.issubset(script):
                 raise ValueError(f"writer output missing keys: {REQUIRED_SCRIPT_KEYS - script.keys()}")
-            script["visual_queries"] = write_visual_queries(script["narration"])
+            sentences = split_sentences(script["narration"])
+            script["beats"] = write_beats(sentences)
             if on_stage:
                 on_stage("fact_checking")
             checked = fact_check(script["narration"])
