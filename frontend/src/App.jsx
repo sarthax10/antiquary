@@ -8,6 +8,7 @@ import Login from "./pages/Login";
 import Pending from "./pages/Pending";
 import Review from "./pages/Review";
 import Signup from "./pages/Signup";
+import StoryDetail from "./pages/StoryDetail";
 
 export default function App() {
   return (
@@ -16,15 +17,17 @@ export default function App() {
       <Route path="/signup" element={<Signup />} />
       <Route path="/pending" element={<Pending />} />
 
+      {/* One layout route renders the app shell once for every signed-in page. */}
       <Route element={<RequireApproved />}>
         <Route path="/create" element={<Create />} />
         <Route path="/review" element={<Review />} />
         <Route path="/library" element={<Library />} />
         <Route path="/archive" element={<Archive />} />
-      </Route>
+        <Route path="/stories/:id" element={<StoryDetail />} />
 
-      <Route element={<RequireAdmin />}>
-        <Route path="/admin/users" element={<AdminUsers />} />
+        <Route element={<RequireAdmin />}>
+          <Route path="/admin/users" element={<AdminUsers />} />
+        </Route>
       </Route>
 
       <Route path="/" element={<Navigate to="/create" replace />} />
