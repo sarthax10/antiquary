@@ -68,6 +68,18 @@ def logout():
     return jsonify(message="Logged out.")
 
 
+@bp.route("/change-password", methods=["POST"])
+@login_required
+def change_password():
+    data = request.get_json(silent=True) or {}
+    error = service.change_password(
+        current_user, data.get("current_password") or "", data.get("new_password") or ""
+    )
+    if error:
+        return jsonify(error=error), 400
+    return jsonify(message="Password updated.")
+
+
 @bp.route("/admin-check")
 @admin_required
 def admin_check():

@@ -54,6 +54,29 @@ def create_signup_request(email: str, password: str, role: str = "user", status:
     return user
 
 
+def change_password(user: User, current_password: str, new_password: str) -> str | None:
+    """Self-service password change. Returns an error message, or None on success."""
+    if not check_password_hash(user.password_hash, current_password):
+        return "Current password is incorrect."
+    pw_error = password_error(new_password)
+    if pw_error:
+        return pw_error
+    user.password_hash = generate_password_hash(new_password)
+    get_session().commit()
+    return None
+
+
+def set_password(user: User, new_password: str) -> str | None:
+    """Admin-initiated reset — no current-password check, used from app/admin/service.py.
+    Returns an error message, or None on success."""
+    pw_error = password_error(new_password)
+    if pw_error:
+        return pw_error
+    user.password_hash = generate_password_hash(new_password)
+    get_session().commit()
+    return None
+
+
 def authenticate(email: str, password: str) -> tuple[User | None, str | None]:
     """Returns (user, error_message) — error_message is None on success.
 

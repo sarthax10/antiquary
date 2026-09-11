@@ -5,7 +5,7 @@ from flask import Blueprint, jsonify, request
 from flask_login import current_user
 
 from app.auth.decorators import admin_required
-from app.models import VALID_USER_STATUSES
+from app.models import VALID_ROLES, VALID_USER_STATUSES
 
 from . import service
 
@@ -49,4 +49,34 @@ def update_user_status(user_id):
     user = service.set_user_status(user_id, status, approved_by=current_user)
     if user is None:
         return jsonify(error="not found"), 404
+    return jsonify(user=_user_json(user))
+
+
+@bp.route("/users/<int:user_id>/role", methods=["POST"])
+@admin_required
+def update_user_role(user_id):
+    data = request.get_json(silent=True) or {}
+    role = data.get("role")
+    if role not in VALID_ROLES:
+        return jsonify(error="invalid role"), 400
+    # Same reasoning as the status self-lockout above: an admin demoting themselves
+    # could leave the app with no admin left to reverse it.
+    if user_id == current_user.id and role != "admin":
+        return jsonify(error="you can't change your own role"), 400
+    user = service.set_user_role(user_id, role)
+    if user is None:
+        return jsonify(error="not found"), 404
+    return jsonify(user=_user_json(user))
+
+
+@bp.route("/users/<int:user_id>/reset-password", methods=["POST"])
+@admin_required
+def reset_user_password(user_id):
+    data = request.get_json(silent=True) or {}
+    password = data.get("password") or ""
+    user, error = service.reset_password(user_id, password)
+    if error == "not found":
+        return jsonify(error="not found"), 404
+    if error:
+        return jsonify(error=error), 400
     return jsonify(user=_user_json(user))
