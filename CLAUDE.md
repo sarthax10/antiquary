@@ -100,6 +100,7 @@ pip install -r requirements.txt
 cp .env.example .env   # fill in SECRET_KEY, DATABASE_URL, S3_*, ADMIN_EMAIL/PASSWORD
 alembic upgrade head
 flask --app wsgi seed-admin
+flask --app wsgi ensure-bucket
 python wsgi.py          # serves the API on :8787
 
 # Frontend (separate terminal)
@@ -116,3 +117,6 @@ service definitions, or run them natively — whatever's convenient for your mac
 - `docs/ARCHITECTURE.md` — layering rules, package-by-package breakdown, conventions.
 - `docs/DEPLOYMENT.md` — exact steps to get this running on a real Ubuntu server
   (domain, port-forwarding, GitHub Actions self-hosted runner, first `.env`).
+- `docs/SERVER_SETUP.md` — the detailed, self-contained walkthrough of the same
+  process, meant to be handed to a Claude Code session running on the server itself
+  (or followed by hand step-by-step), starting from a bare Ubuntu Server install.

@@ -5,10 +5,10 @@ Usage: run_pipeline.py "<topic seed, or blank for a free pick>"
 Prints the new story id.
 
 Spawned as a subprocess by app.generation.job_manager.start() when triggered from the
-API, or runnable standalone for local testing/an n8n Execute Command node. Reports real
-progress via job_manager.set_stage() at each genuine step — not a simulated timer. Fully
-independent of Flask: only needs DATABASE_URL/S3_* env vars (see .env.example), not the
-web app running.
+API, or runnable standalone for local testing. Reports real progress via
+job_manager.set_stage() at each genuine step — not a simulated timer. Fully independent
+of Flask: only needs DATABASE_URL/S3_* env vars (see .env.example), not the web app
+running.
 """
 import asyncio
 import json

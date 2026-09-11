@@ -1,7 +1,12 @@
 """`flask seed-admin` — idempotently creates the admin account from ADMIN_EMAIL/
 ADMIN_PASSWORD env vars, so the initial admin credential lives in the server's .env,
 never in source code. Schema itself is created via `alembic upgrade head`, not here —
-one path to create tables, not two."""
+one path to create tables, not two.
+
+`flask ensure-bucket` — idempotently creates the MinIO/S3 bucket videos get uploaded to
+(see app/storage.py). Run once before gunicorn starts, same as seed-admin, rather than
+from create_app() itself — that runs once per gunicorn worker on boot, which would race
+multiple workers against the same bucket-create call for no benefit."""
 import click
 from flask import Flask
 
@@ -24,3 +29,10 @@ def register_cli(app: Flask) -> None:
 
         auth_service.create_signup_request(email, password, role="admin", status="approved")
         click.echo(f"Created admin account: {email}")
+
+    @app.cli.command("ensure-bucket")
+    def ensure_bucket():
+        from app import storage
+
+        storage.ensure_bucket()
+        click.echo(f"Bucket {storage.S3_BUCKET!r} ready at {storage.S3_ENDPOINT_URL}.")

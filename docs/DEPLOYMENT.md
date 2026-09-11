@@ -4,6 +4,10 @@ Everything in this repo (code, Docker configs, CI workflow) is ready to deploy. 
 steps below are the ones that need your physical machine or your accounts — nothing
 here can be done from inside a coding assistant's sandbox, so do these yourself.
 
+See `docs/SERVER_SETUP.md` for the detailed, self-contained version of this same
+walkthrough — hand that file to a Claude Code session running on the server itself and
+it has everything needed with no other context.
+
 ## 1. Install Ubuntu Server
 
 Install Ubuntu Server (22.04 LTS or newer) on the PC that will host this. Standard

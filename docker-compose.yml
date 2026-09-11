@@ -74,6 +74,7 @@ services:
     command: >
       sh -c "alembic upgrade head &&
              flask --app wsgi seed-admin &&
+             flask --app wsgi ensure-bucket &&
              gunicorn wsgi:app --bind 0.0.0.0:8787 --workers 2 --timeout 180"
     restart: unless-stopped
     # No host port published — Caddy is the only public entry point.
@@ -95,23 +96,6 @@ services:
       - app
     restart: unless-stopped
 
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: antiquary-n8n
-    ports:
-      - "5678:5678"
-    environment:
-      - N8N_SECURE_COOKIE=false
-      - TZ=UTC
-    volumes:
-      - n8n_data:/home/node/.n8n
-      - ./n8n/workflows:/home/node/workflows
-      - ./pipeline:/home/node/pipeline
-      - ./media:/home/node/media
-    depends_on:
-      - ollama
-    restart: unless-stopped
-
 volumes:
   postgres_data:
   minio_data:
@@ -119,4 +103,3 @@ volumes:
   media_data:
   caddy_data:
   caddy_config:
-  n8n_data:

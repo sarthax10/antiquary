@@ -22,7 +22,7 @@ import time
 import requests
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 # Point this at a stronger/different model than OLLAMA_MODEL if you have one —
 # checking a claim with a different model than the one that wrote it is more
 # likely to catch a hallucination than asking the same model to grade itself.
