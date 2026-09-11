@@ -33,9 +33,19 @@ jobs:
         run: |
           docker compose build
           docker compose up -d
+          docker compose restart caddy
         # The `app` service's own startup command already runs `alembic upgrade head`
         # and `flask seed-admin` on every start (idempotent) — no separate migration
         # step needed here.
+        #
+        # The explicit `restart caddy` matters: `docker compose up -d` only recreates a
+        # container when its docker-compose.yml *service definition* changed. caddy's
+        # Caddyfile and the frontend's dist/ are just bind-mounted content, so editing
+        # either one doesn't trigger a restart on its own — and the frontend build above
+        # deletes and recreates dist/ on every run, which silently orphans a long-lived
+        # container's bind mount to it (confirmed: this broke the live site for ~2 hours
+        # between deploys, serving 404s with no way to even `docker exec` into the
+        # container). Restarting caddy every deploy re-attaches it to the fresh content.
 
       - name: Health check
         # --resolve pins the domain to loopback instead of really going out to the
