@@ -84,6 +84,7 @@ services:
     container_name: antiquary-caddy
     environment:
       DOMAIN: ${DOMAIN}
+      NETDATA_AUTH_HASH: ${NETDATA_AUTH_HASH}
     ports:
       - "80:80"
       - "443:443"
@@ -94,6 +95,34 @@ services:
       - caddy_config:/config
     depends_on:
       - app
+      - netdata
+    restart: unless-stopped
+
+  # Server + per-container resource metrics (CPU/RAM/disk/network), zero-config —
+  # simplified stand-in for a full Grafana/Prometheus stack, appropriate for a single
+  # box. No Netdata Cloud integration (no claim token set) — purely local, matches the
+  # project's self-hosted/free constraint. Reachable at /stats behind Basic Auth via
+  # Caddy, not published as a host port itself (same "Caddy is the only public entry
+  # point" pattern as every other service here).
+  netdata:
+    image: netdata/netdata:latest
+    container_name: antiquary-netdata
+    hostname: reliquary
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - netdata_config:/etc/netdata
+      - netdata_lib:/var/lib/netdata
+      - netdata_cache:/var/cache/netdata
+      - /etc/passwd:/host/etc/passwd:ro
+      - /etc/group:/host/etc/group:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/os-release:/host/etc/os-release:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
 
 volumes:
@@ -103,3 +132,6 @@ volumes:
   media_data:
   caddy_data:
   caddy_config:
+  netdata_config:
+  netdata_lib:
+  netdata_cache:
