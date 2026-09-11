@@ -78,7 +78,7 @@
   border-radius: 0 2px 2px 0;
   background: var(--tungsten);
 }
-.nav-index { margin-left: auto; font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.nav-index { margin-left: auto; font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
 .nav-count {
   margin-left: auto;
   min-width: 22px;
@@ -175,7 +175,7 @@
 .account-id { min-width: 0; }
 .account-email { font-size: var(--text-xs); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-role { font-family: var(--font-mono); font-size: 10px; color: var(--ink-muted); letter-spacing: 0.08em; text-transform: uppercase; }
-.sidebar-note { padding: 0 var(--s-2); font-size: 11px; line-height: 1.45; color: var(--ink-faint); }
+.sidebar-note { padding: 0 var(--s-2); font-size: 11px; line-height: 1.45; color: var(--ink-muted); }
 
 /* ---- Top bar + tab bar (below 1024px) ------------------------------------ */
 .topbar, .tabbar { display: none; }

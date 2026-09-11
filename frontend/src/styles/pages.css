@@ -205,7 +205,7 @@
 .poster-frame video[data-ready="true"] { opacity: 1; }
 @media (hover: hover) { .poster:hover .poster-frame video { transform: scale(1.03); } }
 .poster-skeleton { position: absolute; inset: 0; border-radius: 0; }
-.poster-fallback { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: var(--s-2); color: var(--ink-faint); font-size: var(--text-xs); }
+.poster-fallback { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: var(--s-2); color: var(--ink-muted); font-size: var(--text-xs); }
 .poster-fallback svg { width: 22px; height: 22px; }
 .poster-shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7, 6, 5, 0.5) 0%, transparent 26%, transparent 72%, rgba(7, 6, 5, 0.45) 100%); pointer-events: none; }
 .poster-top { position: absolute; top: var(--s-2); left: var(--s-2); right: var(--s-2); display: flex; justify-content: space-between; align-items: center; gap: var(--s-2); }

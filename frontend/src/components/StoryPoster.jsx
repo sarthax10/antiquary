@@ -23,7 +23,11 @@ export default function StoryPoster({ story, to, showStatus = true, meta, style,
   const [progress, setProgress] = useState(0);
   const { flagged } = claimTotals(story);
 
-  useEffect(() => () => clearTimeout(hoverTimer.current), []);
+  const metaTimer = useRef(null);
+  useEffect(() => () => {
+    clearTimeout(hoverTimer.current);
+    clearTimeout(metaTimer.current);
+  }, []);
 
   function startPreview() {
     if (!ready || failed || !canHover() || prefersReducedMotion()) return;
@@ -74,6 +78,9 @@ export default function StoryPoster({ story, to, showStatus = true, meta, style,
               aria-hidden="true"
               data-ready={ready ? "true" : undefined}
               onLoadedData={() => setReady(true)}
+              // iOS Safari loads metadata but withholds frame data until the user
+              // interacts — stop the skeleton shimmer anyway rather than pulse forever.
+              onLoadedMetadata={() => { metaTimer.current = setTimeout(() => setReady(true), 1500); }}
               onError={() => setFailed(true)}
               onTimeUpdate={(e) => previewing && setProgress(e.currentTarget.currentTime / (e.currentTarget.duration || 1))}
               onEnded={stopPreview}

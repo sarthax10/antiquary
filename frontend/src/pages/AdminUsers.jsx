@@ -141,7 +141,20 @@ export default function AdminUsers() {
         </div>
       ) : (
         <>
-          <div className="segmented" role="tablist" aria-label="Filter members" style={{ marginBottom: 20 }}>
+          <div
+            className="segmented"
+            role="tablist"
+            aria-label="Filter members"
+            style={{ marginBottom: 20 }}
+            onKeyDown={(e) => {
+              // WAI-ARIA tabs pattern: arrows move between tabs.
+              if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+              const i = TABS.findIndex((t) => t.key === activeTab);
+              const next = TABS[(i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length];
+              setTab(next.key);
+              e.currentTarget.querySelector(`#tab-${next.key}`)?.focus();
+            }}
+          >
             {TABS.map((t) => (
               <button
                 key={t.key}
@@ -149,6 +162,7 @@ export default function AdminUsers() {
                 role="tab"
                 id={`tab-${t.key}`}
                 aria-selected={activeTab === t.key}
+                tabIndex={activeTab === t.key ? 0 : -1}
                 aria-controls="members-panel"
                 onClick={() => setTab(t.key)}
               >

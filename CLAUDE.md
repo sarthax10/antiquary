@@ -112,6 +112,17 @@ npm run dev              # serves on :5173, proxies /api to :8787
 Needs Postgres and MinIO reachable locally (see `docker-compose.yml` for the real
 service definitions, or run them natively — whatever's convenient for your machine).
 
+## Frontend design system
+
+The UI follows the "screening room" design system documented in
+`UI_UX_REDESIGN_REVIEW.md` (tokens in `frontend/src/styles/tokens.css`). Key rules: one
+signal colour (tungsten) that always means "needs a human eye"; reversible actions confirm
+with an Undo toast rather than a blocking dialog, and only actions that affect another
+person (suspending/revoking a member) or discard in-progress work (stopping a generation)
+use `ConfirmDialog`; single-key shortcuts go through `useHotkeys` (which ignores modifier
+chords, typing and open dialogs); fact-check "verified" is shown as "nothing flagged".
+No new npm dependencies were added — keep it that way unless one clearly pays for itself.
+
 ## Where to look next
 
 - `docs/ARCHITECTURE.md` — layering rules, package-by-package breakdown, conventions.
