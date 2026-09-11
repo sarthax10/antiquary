@@ -72,48 +72,62 @@ def _commons_search(query: str) -> str | None:
     })
 
 
-# Wikidata's wbsearchentities does an entity-name match, not full-text search — a
-# visual_query like "Albert Einstein portrait" (the trailing descriptor is deliberately
-# there, it's what makes the SAME query work well against Commons/Pexels) returns no
-# hits at all, even though "Albert Einstein" alone matches immediately. Stripped as a
-# fallback, not the primary attempt, since most beat queries are already just a name.
-_PORTRAIT_DESCRIPTORS = {
+# Both Wikidata's wbsearchentities (an entity-name match, not full-text search) and
+# Commons' own keyword search return nothing — or the wrong thing — for a query like
+# "Roman Emperor Aurelian portrait", even though "Aurelian" alone matches immediately on
+# both. The LLM is deliberately told to write specific, descriptive queries (that's what
+# makes the SAME query work well against Pexels/Commons for non-person beats), so rather
+# than change the prompt, strip both ends down to what's most likely the bare name and
+# try progressively narrower candidates — used by both the Wikidata lookup and the
+# Commons fallback below, since both have this problem.
+_LEADING_TITLES = {
+    "roman", "greek", "egyptian", "emperor", "empress", "king", "queen", "pharaoh",
+    "general", "prince", "princess", "president", "sir", "dr", "saint", "st", "pope",
+    "duke", "duchess", "tsar", "tsarina", "sultan", "lord", "lady", "captain", "admiral",
+    "colonel", "chief", "chancellor", "senator",
+}
+_TRAILING_DESCRIPTORS = {
     "portrait", "photo", "photograph", "statue", "bust", "painting", "engraving",
-    "illustration", "drawing", "sketch", "picture", "image", "likeness", "photograph,",
+    "illustration", "drawing", "sketch", "picture", "image", "likeness",
 }
 
 
-def _strip_descriptor(query: str) -> str:
+def _strip_leading_titles(query: str) -> str:
     words = query.split()
-    while len(words) > 1 and words[-1].lower().strip(".,") in _PORTRAIT_DESCRIPTORS:
+    while len(words) > 1 and words[0].lower().strip(".,") in _LEADING_TITLES:
+        words = words[1:]
+    return " ".join(words)
+
+
+def _strip_trailing_descriptor(query: str) -> str:
+    words = query.split()
+    while len(words) > 1 and words[-1].lower().strip(".,") in _TRAILING_DESCRIPTORS:
         words = words[:-1]
     return " ".join(words)
 
 
-def _wikidata_qid(name: str) -> str | None:
+def _name_candidates(query: str) -> list[str]:
+    """Progressively narrower candidates, most-specific first, deduplicated."""
+    stripped = _strip_trailing_descriptor(_strip_leading_titles(query))
+    candidates = [query, _strip_leading_titles(query), _strip_trailing_descriptor(query), stripped]
+    return list(dict.fromkeys(c for c in candidates if c))
+
+
+def _wikidata_qids(name: str, limit: int = 4) -> list[str]:
+    """Several candidate items, not just the top hit — wbsearchentities' first result is
+    sometimes a sparse/near-empty duplicate or homonym item with no P18 claim at all,
+    while a well-documented item for the same name ranks lower."""
     resp = requests.get(
         WIKIDATA_API,
         headers=HEADERS,
-        params={"action": "wbsearchentities", "search": name, "language": "en", "type": "item", "limit": 1, "format": "json"},
+        params={"action": "wbsearchentities", "search": name, "language": "en", "type": "item", "limit": limit, "format": "json"},
         timeout=20,
     )
     resp.raise_for_status()
-    hits = resp.json().get("search") or []
-    return hits[0]["id"] if hits else None
+    return [h["id"] for h in (resp.json().get("search") or [])]
 
 
-def _wikidata_portrait(name: str) -> str | None:
-    """The Wikidata item most closely matching `name`, then its P18 ("image") claim,
-    resolved to an actual Commons file URL. None at any step (no matching item, no P18
-    claim, image too small/wrong type) falls through to the Commons keyword search."""
-    qid = _wikidata_qid(name)
-    if not qid:
-        stripped = _strip_descriptor(name)
-        if stripped != name:
-            qid = _wikidata_qid(stripped)
-    if not qid:
-        return None
-
+def _wikidata_p18_image(qid: str) -> str | None:
     claims = requests.get(
         WIKIDATA_API,
         headers=HEADERS,
@@ -136,6 +150,33 @@ def _wikidata_portrait(name: str) -> str | None:
         "iiprop": "url|size|mime",
         "format": "json",
     })
+
+
+def _wikidata_portrait(name: str) -> str | None:
+    """Tries several name candidates (see _name_candidates), and for each, several
+    Wikidata items (see _wikidata_qids) — the first item with an actual usable P18
+    image wins. None only once every candidate item is exhausted; falls through to the
+    Commons keyword search from there. Paced (a beat that needs this many attempts is
+    rare) since this can otherwise fire a burst of Wikidata requests fast enough to get
+    429'd mid-search."""
+    first = True
+    for candidate in _name_candidates(name):
+        if not first:
+            time.sleep(0.3)
+        first = False
+        try:
+            qids = _wikidata_qids(candidate)
+        except requests.exceptions.RequestException:
+            continue
+        for qid in qids:
+            time.sleep(0.3)
+            try:
+                image = _wikidata_p18_image(qid)
+            except requests.exceptions.RequestException:
+                continue
+            if image:
+                return image
+    return None
 
 
 def _pexels_video_search(query: str) -> str | None:
@@ -248,14 +289,15 @@ def _fetch_person(query: str, out_base: Path, seed: int, entity_type: str) -> di
         if asset:
             return asset
 
-    try:
-        image_url = _commons_search(query)
-    except requests.exceptions.RequestException:
-        image_url = None
-    if image_url:
-        asset = _save_image(image_url, out_base, "commons", entity_type)
-        if asset:
-            return asset
+    for candidate in _name_candidates(query):
+        try:
+            image_url = _commons_search(candidate)
+        except requests.exceptions.RequestException:
+            image_url = None
+        if image_url:
+            asset = _save_image(image_url, out_base, "commons", entity_type)
+            if asset:
+                return asset
 
     path = out_base.with_suffix(".jpg")
     _placeholder(path, seed)
