@@ -1,4 +1,13 @@
 {$DOMAIN} {
+	# HTTP/3 (QUIC, over UDP) disabled: some mobile carriers/networks drop UDP
+	# traffic, and a browser that sees Caddy's default Alt-Svc h3 advertisement
+	# will try QUIC first and can hang before falling back to HTTP/2 over TCP —
+	# confirmed as the cause of the site failing to load on mobile data while a
+	# plain curl (which never attempts HTTP/3) worked fine.
+	servers {
+		protocols h1 h2
+	}
+
 	encode gzip
 
 	# Everything under /api/* goes to the Flask JSON API.
