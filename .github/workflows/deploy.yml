@@ -38,9 +38,15 @@ jobs:
         # step needed here.
 
       - name: Health check
+        # --resolve pins the domain to loopback instead of really going out to the
+        # internet and back in: this router doesn't support NAT hairpinning, so a plain
+        # `curl https://$DOMAIN` from the server itself to its own public domain hangs
+        # indefinitely rather than failing (confirmed while setting this up — see
+        # docs/SERVER_SETUP.md). --max-time is a second safety net so a single bad
+        # attempt can't eat the whole retry budget either way.
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS https://${DOMAIN}/api/health; then exit 0; fi
+            if curl -fsS --max-time 5 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/api/health"; then exit 0; fi
             sleep 2
           done
           echo "App did not become healthy in time" >&2
