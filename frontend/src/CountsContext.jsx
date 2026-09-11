@@ -1,24 +1,92 @@
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { listUsers } from "./api/admin";
 import { listStories } from "./api/studio";
+import { useAuth } from "./AuthContext";
 
-// Sidebar nav-counts, shared so any page that mutates a story's status (approve/reject/
-// restore) or finishes a generation can trigger a refresh without needing a route change
-// to happen to notice — Sidebar previously only refetched on location.pathname change,
-// which missed "approve, stay on /review for the next item" entirely.
+// Shared story lists + nav counts. Any page that mutates a story's status (approve /
+// reject / restore) or finishes a generation calls refresh() so the sidebar, tab bar and
+// command menu stay in sync without waiting for a route change.
+//
+// The lists themselves are kept (not just their lengths) because the API already sends
+// them in full to compute counts — the command menu reuses them for story search at no
+// extra request cost.
 const CountsContext = createContext(null);
 
+const EMPTY = { pending: [], approved: [], rejected: [] };
+
 export function CountsProvider({ children }) {
-  const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
+  const { user } = useAuth();
+  const [lists, setLists] = useState(EMPTY);
+  const [pendingMembers, setPendingMembers] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const inflight = useRef(null);
+  const queued = useRef(false);
+
+  const isApproved = user?.status === "approved";
+  const isAdmin = isApproved && user?.role === "admin";
 
   const refresh = useCallback(() => {
-    Promise.all([listStories("pending"), listStories("approved"), listStories("rejected")]).then(
-      ([pending, approved, rejected]) => {
-        setCounts({ pending: pending.length, approved: approved.length, rejected: rejected.length });
-      }
-    );
-  }, []);
+    if (!isApproved) return Promise.resolve();
+    // Coalesce bursts into one fetch — but if a refresh is requested while one is in
+    // flight (e.g. Undo right after a decision), run exactly one more afterwards so the
+    // counts never settle on data from before the latest change.
+    if (inflight.current) {
+      queued.current = true;
+      return inflight.current;
+    }
+    const p = Promise.all([
+      listStories("pending"),
+      listStories("approved"),
+      listStories("rejected"),
+      isAdmin ? listUsers("pending").catch(() => null) : Promise.resolve(null),
+    ])
+      .then(([pending, approved, rejected, members]) => {
+        setLists({ pending, approved, rejected });
+        if (members) setPendingMembers(members.length);
+        setLoaded(true);
+      })
+      .catch(() => {
+        /* counts are ambient — a failed refresh keeps the last known values */
+      })
+      .finally(() => {
+        inflight.current = null;
+        if (queued.current) {
+          queued.current = false;
+          refreshRef.current?.();
+        }
+      });
+    inflight.current = p;
+    return p;
+  }, [isApproved, isAdmin]);
 
-  return <CountsContext.Provider value={{ counts, refresh }}>{children}</CountsContext.Provider>;
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+
+  useEffect(() => {
+    if (isApproved) refresh();
+    else {
+      setLists(EMPTY);
+      setPendingMembers(0);
+      setLoaded(false);
+    }
+  }, [isApproved, refresh]);
+
+  const value = useMemo(
+    () => ({
+      lists,
+      loaded,
+      counts: {
+        pending: lists.pending.length,
+        approved: lists.approved.length,
+        rejected: lists.rejected.length,
+        members: pendingMembers,
+      },
+      refresh,
+    }),
+    [lists, loaded, pendingMembers, refresh]
+  );
+
+  return <CountsContext.Provider value={value}>{children}</CountsContext.Provider>;
 }
 
 export function useCounts() {

@@ -13,3 +13,4 @@ frontend/dist/
 
 # Alembic/local scratch
 *.log
+frontend/e2e/shots/

@@ -70,9 +70,17 @@ app/                        Flask JSON API — no templates/, no static/
 frontend/                    React SPA (Vite), the entire UI — talks to app/ only via fetch
   src/
     api/                     one module per backend feature, thin fetch wrappers
-    pages/                   Login, Signup, Pending, AdminUsers, Create, Review, Library, Archive
-    components/              shared UI pieces (Sidebar, VideoPlayer, FactCheckPanel, ...)
-    styles/                  the existing cinema/archive/editorial design system, ported as CSS
+    pages/                   Login, Signup, Pending, AdminUsers, Create, Review, Library,
+                              Archive, StoryDetail
+    components/              AppShell (sidebar / top bar / tab bar), CommandMenu, StoryPoster,
+                              VideoFrame, FactCheck, StoryDossier, StoryCollection, ui.jsx
+                              (Button, fields, Dialog, Stamp, EmptyState, ...), icons.jsx
+    *Context.jsx             Auth, Counts (story lists + nav counts), Generation (global job
+                              status + polling), Toast (undoable confirmations)
+    lib/                     format helpers, hooks (hotkeys, in-view, title), view transitions
+    styles/                  tokens.css → base → components → shell → pages; the design system
+                              is documented in UI_UX_REDESIGN_REVIEW.md
+  e2e/                       optional mock API + Playwright smoke flows (not part of the build)
 
 pipeline/                    video generation, independent of the web app
 migrations/                  Alembic
