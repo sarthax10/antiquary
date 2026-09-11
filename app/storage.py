@@ -16,8 +16,6 @@ S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY", "")
 S3_BUCKET = os.environ.get("S3_BUCKET", "antiquary-videos")
 S3_REGION = os.environ.get("S3_REGION", "us-east-1")
 
-PRESIGNED_URL_TTL_SECONDS = 3600
-
 
 def _client():
     return boto3.client(
@@ -41,12 +39,17 @@ def upload_video(local_path: str, object_key: str) -> None:
     _client().upload_file(local_path, S3_BUCKET, object_key, ExtraArgs={"ContentType": "video/mp4"})
 
 
-def presigned_video_url(object_key: str) -> str:
-    return _client().generate_presigned_url(
-        "get_object",
-        Params={"Bucket": S3_BUCKET, "Key": object_key},
-        ExpiresIn=PRESIGNED_URL_TTL_SECONDS,
-    )
+def get_video_object(object_key: str, range_header: str | None = None) -> dict:
+    """Fetches a video object for the app to stream back to the client itself, rather
+    than redirecting to a presigned MinIO URL — MinIO has no published host port (see
+    docker-compose.yml) and is meant to stay fully internal, so a URL pointing directly
+    at it (using the `minio` service hostname) would be unreachable by any real client.
+    `range_header` is passed straight through from the client's own Range header so
+    HTML5 video seeking works."""
+    kwargs = {"Bucket": S3_BUCKET, "Key": object_key}
+    if range_header:
+        kwargs["Range"] = range_header
+    return _client().get_object(**kwargs)
 
 
 def delete_video(object_key: str) -> None:

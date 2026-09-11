@@ -3,7 +3,6 @@ and the recent-activity feed on the Create screen. All querying lives here — r
 never touches the DB session directly."""
 from app.db import get_session
 from app.models import Story, User, utcnow
-from app.storage import presigned_video_url
 
 
 def pending_stories() -> list[Story]:
@@ -59,6 +58,8 @@ def restore_story(story_id: str) -> Story | None:
 
 
 def video_url(story: Story) -> str | None:
+    # Same-origin path the app itself serves (see studio.routes.story_video) — not a
+    # direct MinIO link, since MinIO stays internal-only.
     if not story.video_object_key:
         return None
-    return presigned_video_url(story.video_object_key)
+    return f"/api/stories/{story.id}/video"

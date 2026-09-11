@@ -1,8 +1,9 @@
 """Studio API: /api/stories/* and /api/generate/* — the actual product. Every route
 requires an approved, logged-in user (app.auth.decorators.approved_required)."""
-from flask import Blueprint, jsonify, redirect, request
+from flask import Blueprint, Response, jsonify, request
 from flask_login import current_user
 
+from app import storage
 from app.auth.decorators import approved_required
 from app.generation import job_manager
 from app.models import VALID_STORY_STATUSES, Story
@@ -63,10 +64,20 @@ def story_video(story_id):
     story = service.get_story(story_id)
     if story is None:
         return jsonify(error="not found"), 404
-    url = service.video_url(story)
-    if url is None:
+    if not story.video_object_key:
         return jsonify(error="video not available"), 404
-    return redirect(url)
+
+    obj = storage.get_video_object(story.video_object_key, request.headers.get("Range"))
+    headers = {
+        "Content-Type": obj.get("ContentType", "video/mp4"),
+        "Content-Length": str(obj["ContentLength"]),
+        "Accept-Ranges": "bytes",
+    }
+    status = 200
+    if "ContentRange" in obj:
+        headers["Content-Range"] = obj["ContentRange"]
+        status = 206
+    return Response(obj["Body"].iter_chunks(), status=status, headers=headers)
 
 
 @bp.route("/stories/<story_id>/decide", methods=["POST"])
