@@ -27,6 +27,13 @@ class Story(Base):
     # into for visual sourcing/render timing — see pipeline/generate_script.py. Kept for
     # provenance (why THIS image was chosen for THIS beat); not surfaced via the API.
     beats = Column(JSONB, nullable=False, default=list)
+    # The editable project representation (visual/narration/caption/music tracks of
+    # ordered, timed clips) that the future timeline editor reads and writes — see
+    # docs/ARCHITECTURE.md "Timeline (editor data model)". Populated by the auto-generate
+    # pipeline as this story's initial edit; {} for stories rendered before this existed.
+    # Not yet consumed by render.py (that generalization is a later, separate step) —
+    # today it's pure provenance/foundation, changing it does not change the video.
+    timeline = Column(JSONB, nullable=False, default=dict)
     fact_check = Column(JSONB, nullable=False, default=dict)
     needs_human_review = Column(Boolean, nullable=False, default=True)
     status = Column(String(16), nullable=False, default="pending", index=True)

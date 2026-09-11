@@ -30,8 +30,9 @@ import time
 from pathlib import Path
 
 import cv2
+import numpy as np
 import requests
-from PIL import Image, ImageDraw
+from PIL import Image
 
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
@@ -88,7 +89,9 @@ _LEADING_TITLES = {
 }
 _TRAILING_DESCRIPTORS = {
     "portrait", "photo", "photograph", "statue", "bust", "painting", "engraving",
-    "illustration", "drawing", "sketch", "picture", "image", "likeness",
+    "illustration", "drawing", "sketch", "picture", "image", "likeness", "throne",
+    "coin", "relief", "mosaic", "fresco", "seal", "monument", "crown", "tomb", "mask",
+    "effigy", "medallion", "figurine", "sculpture", "depiction", "artwork", "mural",
 }
 
 
@@ -241,16 +244,32 @@ def _detect_face_center(image_path: Path) -> list[float] | None:
 
 
 def _placeholder(out_path: Path, seed: int) -> None:
+    """Last-resort background when every real source misses for a beat — a radial
+    vignette + subtle grain, not a flat top-to-bottom gradient, so it reads as an
+    intentional stylized backdrop rather than an obviously-broken placeholder. Still
+    honest about being a fallback: no attempt to fake photographic content."""
     w, h = 1080, 1920
-    img = Image.new("RGB", (w, h))
-    draw = ImageDraw.Draw(img)
-    palette = [((30, 25, 45), (90, 60, 40)), ((20, 30, 40), (60, 40, 70)), ((35, 20, 20), (70, 55, 30))]
-    top, bottom = palette[seed % len(palette)]
-    for y in range(h):
-        t = y / h
-        rgb = tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
-        draw.line([(0, y), (w, y)], fill=rgb)
-    img.save(out_path, quality=90)
+    palette = [
+        ((70, 45, 30), (18, 14, 20)),   # warm ember core -> near-black edge
+        ((30, 45, 55), (12, 14, 22)),   # cool teal core -> near-black edge
+        ((55, 30, 40), (16, 12, 18)),   # muted wine core -> near-black edge
+    ]
+    core, edge = palette[seed % len(palette)]
+
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    cx, cy = w * 0.5, h * 0.38  # slightly above center, similar to a rule-of-thirds portrait
+    dist = np.sqrt(((xx - cx) / (w * 0.75)) ** 2 + ((yy - cy) / (h * 0.55)) ** 2)
+    t = np.clip(dist, 0, 1)[..., None]
+
+    core_arr = np.array(core, dtype=np.float32)
+    edge_arr = np.array(edge, dtype=np.float32)
+    rgb = core_arr * (1 - t) + edge_arr * t
+
+    rng = np.random.default_rng(seed)
+    grain = rng.normal(0, 4.5, size=(h, w, 1)).astype(np.float32)
+    rgb = np.clip(rgb + grain, 0, 255).astype(np.uint8)
+
+    Image.fromarray(rgb, mode="RGB").save(out_path, quality=90)
 
 
 def _download(url: str, max_retries: int = 3) -> bytes | None:
