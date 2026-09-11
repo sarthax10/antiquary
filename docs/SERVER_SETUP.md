@@ -203,15 +203,81 @@ rebuild, restart, and pass the health check.
   in normal operation.
 - **Schema migrations** run automatically (`alembic upgrade head` on every app start,
   no-op if nothing changed) — never hand-edit the Postgres schema.
-- **Back up regularly** — nothing backs itself up:
-  ```bash
-  docker run --rm -v postgres_data:/data -v $(pwd):/backup alpine tar czf /backup/postgres_data.tgz /data
-  docker run --rm -v minio_data:/data -v $(pwd):/backup alpine tar czf /backup/minio_data.tgz /data
-  ```
+- **Backups run automatically**: `~/backups/backup.sh` (weekly, Sundays 3am via cron —
+  `crontab -l` to see it) tars `antiquary_postgres_data` and `antiquary_minio_data` into
+  `~/backups/`, keeping the last 4 of each. Volume names carry the `antiquary_` compose
+  project prefix — `docker volume ls` to confirm. Run it manually any time with
+  `~/backups/backup.sh`.
 - **Changing the Ollama model**: edit `OLLAMA_MODEL` in `.env`, `docker compose up -d`
   — the `ollama-init` one-shot container pulls the new model before `app` restarts.
 - **Logs**: `docker compose logs -f <service>` (`app`, `caddy`, `postgres`, `minio`,
   `ollama`).
+
+## Known gotchas (hit for real setting this up — save yourself the debugging time)
+
+- **Your ISP may block inbound port 80.** Caddy's `http-01` ACME challenge (needs port
+  80) can time out with `"Timeout during connect (likely firewall problem)"` even
+  though your router forwarding is correct — some residential ISPs (this happened on
+  Hathway/FibrSol) block inbound port 80 specifically, as an anti-abuse measure. This
+  isn't fatal: Caddy automatically falls back to the `tls-alpn-01` challenge (port 443
+  only) and still gets a real certificate. Check `docker compose logs caddy` for
+  `"certificate obtained successfully"` — if that's there, you're fine regardless of
+  what happened with port 80. Same ISP-side port-80 quirk is also why `apt`/`curl`
+  against plain `http://` mirrors can hang — switching sources to `https://` mirrors
+  (see `.env`/apt sources setup) or testing with `curl -4 <mirror>` fixed it here.
+
+- **NAT hairpinning (loopback) probably doesn't work on your router.** A device on your
+  own home network — including the server itself — generally **cannot** reach your own
+  public domain (it resolves to your public IP, and most consumer routers won't route
+  that back to a LAN device). This produces confusing symptoms: `curl` to your own
+  domain hangs or times out from the server, from a laptop on the same Wi-Fi, or from a
+  browser automation tool running on a machine on that network — while the exact same
+  domain works fine from a phone on mobile data. Three ways around it, pick per need:
+  1. For **scripts/health checks running on the server itself**, use
+     `curl --resolve yourdomain:443:127.0.0.1 https://yourdomain/...` — forces the
+     connection to loopback while still sending the right SNI/Host header, so it still
+     exercises the real Caddy+TLS+app path. (The CI workflow's health check does this.)
+  2. For **another device on the same LAN** (a laptop, etc.), add a hosts-file entry
+     pointing the domain at the server's **local** IP instead of resolving it publicly
+     — e.g. on Windows, an Administrator PowerShell:
+     `Add-Content -Path "$env:SystemRoot\System32\drivers\etc\hosts" -Value "192.168.1.X`t`tyourdomain"`.
+     This only helps while on that LAN; remove/comment it before taking the laptop
+     elsewhere, or it'll try to reach an unreachable private IP.
+  3. For a **true end-to-end test from outside your network**, use a phone on mobile
+     data with Wi-Fi off — the only genuinely external client available while setting
+     this up.
+
+- **`docker compose up -d` does not restart a service whose only change is
+  bind-mounted content.** It only recreates a container when that service's actual
+  definition in `docker-compose.yml` changes (image, environment, etc.). Editing the
+  `Caddyfile` or rebuilding `frontend/dist` — both just bind-mounted into the running
+  `caddy` container — does **not** trigger a restart on its own. Worse: `npm run build`
+  deletes and recreates the `dist/` directory on every run, which silently orphans a
+  long-lived container's bind mount to it (symptom: the site starts serving empty
+  `404`s, and you can't even `docker exec` into the container anymore — Docker reports
+  `"possible container breakout detected"` because the mount now points to a stale,
+  replaced inode). This is why the CI workflow explicitly runs
+  `docker compose restart caddy` after every `up -d`, regardless of whether anything
+  "changed" from Compose's point of view.
+
+- **Caddy's `servers` block is a global-options directive, not a site-block
+  directive.** To disable HTTP/3 (worth doing — some mobile networks drop UDP/QUIC,
+  and a browser that sees Caddy's default `Alt-Svc: h3` header can hang trying QUIC
+  before falling back to HTTP/2 instead of just using it), it must go in its own
+  top-level block *before* any site block:
+  ```caddyfile
+  {
+  	servers {
+  		protocols h1 h2
+  	}
+  }
+
+  yourdomain.com {
+  	...
+  }
+  ```
+  Putting `servers { ... }` *inside* `yourdomain.com { ... }` fails to parse
+  (`"unrecognized directive: servers"`) and crash-loops the container.
 
 ## If something's broken
 
