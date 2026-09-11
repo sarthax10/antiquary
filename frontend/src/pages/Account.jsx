@@ -48,7 +48,7 @@ export default function Account() {
     <>
       <PageHeader eyebrow="Account" title="Your account" description="Manage your own sign-in credentials." />
 
-      <section className="panel" style={{ maxWidth: 480 }}>
+      <section className="panel panel-pad" style={{ maxWidth: 480 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
           <span className="avatar" aria-hidden="true">{initial(user?.email)}</span>
           <div style={{ minWidth: 0 }}>

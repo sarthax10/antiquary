@@ -54,14 +54,14 @@ def run(topic: str) -> str:
 
     job_manager.set_stage("recording_narration")
     audio_dir = work_dir / "audio"
-    beat_audio = asyncio.run(tts.synthesize_beats(script["beats"], audio_dir, tts.DEFAULT_VOICE))
+    beat_audio = asyncio.run(tts.synthesize_beats(script["beats"], audio_dir))
     narration_path = work_dir / "narration.mp3"
     tts.concat_audio([b["path"] for b in beat_audio], str(narration_path))
 
     job_manager.set_stage("generating_captions")
     words = captions.transcribe_words(str(narration_path))
     ass_path = work_dir / "captions.ass"
-    captions.build_ass(words, str(ass_path), title=script.get("title"))
+    captions.build_ass(words, str(ass_path))
 
     job_manager.set_stage("rendering")
     video_path = work_dir / "final.mp4"

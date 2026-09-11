@@ -18,6 +18,13 @@ COPY migrations/ migrations/
 COPY tests/ tests/
 COPY alembic.ini wsgi.py ./
 
+# Caption fonts (pipeline/captions.py) — the base image only ships DejaVu, so every
+# caption silently fell back to it regardless of the .ass style's requested font name.
+# These are OFL-licensed (pipeline/assets/fonts/OFL.txt), free for commercial use.
+RUN mkdir -p /usr/share/fonts/truetype/antiquary \
+    && cp pipeline/assets/fonts/*.ttf /usr/share/fonts/truetype/antiquary/ \
+    && fc-cache -f
+
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8787
 

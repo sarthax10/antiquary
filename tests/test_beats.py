@@ -104,18 +104,27 @@ def test_write_beats_accepts_valid_model_output(monkeypatch):
     assert beats[1]["text"] == "Two. Three."
 
 
-def test_wrap_title_stays_within_line_budget():
+def test_chunk_words_respects_character_budget():
     import captions
 
-    text = "A Very Long Historical Title About Something Surprising That Happened"
-    result = captions._wrap_title(text, max_chars=22)
-    for line in result.split("\\N"):
-        assert len(line) <= 22 or " " not in line  # a single overlong word is allowed through
+    font = {"name": "Test", "size": 80, "uppercase": False, "avg_char_w": 40}
+    words = [{"word": w, "start": i, "end": i + 1} for i, w in enumerate(
+        ["An", "extraordinarily", "long", "word", "sequence", "here", "today"]
+    )]
+    max_chars = captions.USABLE_WIDTH // font["avg_char_w"]
+    for chunk in captions._chunk_words(words, font):
+        line = " ".join(w["word"] for w in chunk)
+        assert len(line) <= max_chars or len(chunk) == 1  # a single overlong word is allowed through
 
 
-def test_wrap_title_reconstructs_words():
+def test_chunk_words_covers_every_word_in_order():
     import captions
 
-    text = "Short Title Here"
-    result = captions._wrap_title(text, max_chars=22)
-    assert result.replace("\\N", " ") == text
+    font = captions.CAPTION_FONTS[0]
+    words = [{"word": w, "start": i, "end": i + 1} for i, w in enumerate(
+        ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+    )]
+    chunks = captions._chunk_words(words, font)
+    flat = [w for chunk in chunks for w in chunk]
+    assert flat == words
+    assert all(len(c) <= captions.MAX_WORDS_PER_CHUNK for c in chunks)

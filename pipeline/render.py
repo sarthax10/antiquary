@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Render the final vertical video from per-beat visuals (see fetch_visuals.py/tts.py),
-narration audio, and burned-in styled captions (.ass from captions.py, including its own
-title card).
+narration audio, and burned-in styled captions (.ass from captions.py).
 
 Usage: render.py <narration.mp3> <captions.ass> <output.mp4> <beats.json>
   beats.json: a JSON list of {"path", "entity_type", "face": [fx,fy]|null, "duration"}
@@ -19,6 +18,7 @@ grain pass, plus an optional ducked music bed, are the last steps before caption
 Requires ffmpeg on PATH.
 """
 import json
+import random
 import subprocess
 import sys
 from pathlib import Path
@@ -76,14 +76,13 @@ def _zoompan_expr(px: float, py: float, zoom_in: bool) -> tuple[str, str, str]:
 
 
 def _pick_music() -> Path | None:
-    """First track found under pipeline/assets/music/ (alphabetical, deterministic — no
-    files shipped in the repo, see CLAUDE.md/docs for where to source CC0 tracks). A
-    single flat pool for now; picking by topic/tone is a natural follow-up once there's
-    more than a handful of tracks to choose between."""
+    """Random track under pipeline/assets/music/ (see documentary/SOURCE.md for
+    licensing — all CC0). A single flat mood pool for now; picking by topic/tone is a
+    natural follow-up once there's more than a handful of tracks to choose between."""
     if not MUSIC_DIR.is_dir():
         return None
-    tracks = sorted(p for p in MUSIC_DIR.rglob("*.mp3") if p.is_file())
-    return tracks[0] if tracks else None
+    tracks = [p for p in MUSIC_DIR.rglob("*.mp3") if p.is_file()]
+    return random.choice(tracks) if tracks else None
 
 
 def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict]) -> None:

@@ -12,8 +12,8 @@ Prints JSON: {"title", "hook", "narration",
 exact, contiguous slice of "narration" (concatenating every beat's text in order
 reconstructs it exactly), paired with a search query and an entity_type
 ("person"/"place"/"artifact"/"event"/"scene") that downstream visual sourcing
-(fetch_visuals.py) and render timing (render.py, via captions.py's word-timestamp
-recovery) both key off. Getting the LLM to name specific people/places/events per beat
+(fetch_visuals.py) and render timing (render.py, via tts.py's per-beat clip durations)
+both key off. Getting the LLM to name specific people/places/events per beat
 rather than one flat per-video keyword list is what lets sourcing fetch an actual named
 person's portrait instead of a generic stock photo, and what lets the renderer cut to a
 new image on the actual sentence it's relevant to instead of a fixed fraction of the
@@ -55,11 +55,11 @@ pattern-interrupt, not a slow windup.
 
 Return ONLY valid JSON with these keys:
 - "title": a punchy, scroll-stopping title using a proven pattern — a curiosity gap \
-("The King Who Vanished"), a contrarian claim ("Everything About the Tea Party Is Wrong"), or a \
-number-plus-surprising-detail ("The Ship That Sailed Itself"). Under 45 characters — it's shown \
-both in the app and as a two-line on-screen title card at the very start of the video, so it \
-must be short enough to read at a glance and still read as a complete, sensible phrase on its \
-own, not a clickbait fragment.
+("The King Who Vanished From His Own Portrait"), a contrarian claim ("Everything You Know About \
+the Boston Tea Party Is Wrong"), or a number-plus-surprising-detail ("The Ship That Sailed Itself \
+for Nine Days"). Under 70 characters. This is shown in the app (story cards, the review desk) — \
+not burned into the video itself — so it should read as a complete, sensible phrase on its own,
+not a clickbait fragment.
 - "hook": the first spoken line, a genuine pattern-interrupt — an emotional trigger, a direct \
 question, or a contrarian claim that forces the viewer to keep watching to resolve it. Max 15 \
 words.
