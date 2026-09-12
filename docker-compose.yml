@@ -57,14 +57,26 @@ services:
   app:
     build:
       context: .
-      # Enables pipeline/illustrate.py's GPU-based illustration generation (see
-      # OPEN_ISSUES.md #61) — this specific host has a confirmed working NVIDIA GPU
-      # (RTX 3060, driver 561.09, CUDA 12.6) with working Docker passthrough. Set to
-      # "false" (or drop this whole build.args block) if this compose file is ever
-      # deployed to a host without a GPU — the code degrades gracefully either way, but
-      # the `deploy.reservations.devices` block below is a hard requirement Docker
-      # Compose enforces at container-start time, not an optional hint, so it must come
-      # out too on a non-GPU host or the app container will fail to start entirely.
+      # Installs pipeline/illustrate.py's GPU illustration stack (torch/diffusers —
+      # see OPEN_ISSUES.md #61) into the image. This host's NVIDIA GPU (RTX 3060) is
+      # real and Docker GPU passthrough works from an interactive `docker`/`docker
+      # compose` shell (verified directly) — but a real deploy through this project's
+      # GitHub Actions self-hosted runner FAILED twice with "could not select device
+      # driver nvidia" even though nothing else about the host changed, meaning the
+      # runner's own Docker invocation doesn't have the same GPU access an interactive
+      # session does (root cause not yet identified — a runner-service-configuration
+      # question, not something fixable from inside this repo). So there is
+      # deliberately NO `deploy.resources.reservations.devices` GPU reservation here
+      # any more: that was a HARD requirement Compose enforces at container-start time,
+      # and it took production down (failed to start the app container at all) the
+      # moment a real deploy hit it. Leaving WITH_GPU_ILLUSTRATION on so the image still
+      # carries the dependencies is safe either way: illustrate.py's own runtime check
+      # (`torch.cuda.is_available()`) correctly returns False with no device attached,
+      # and the app falls back to the 2D motion-graphics illustrated mode automatically
+      # — exactly the graceful-degradation path this feature was built around. Real GPU
+      # generation only runs today via a manual `docker compose up -d app` from an
+      # interactive shell where passthrough is confirmed working, not through normal
+      # deploys, until the runner's own GPU access is sorted out.
       args:
         WITH_GPU_ILLUSTRATION: "true"
     container_name: antiquary-app
@@ -73,13 +85,6 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       S3_ENDPOINT_URL: http://minio:9000
       OLLAMA_HOST: http://ollama:11434
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     volumes:
       - media_data:/app/media
     depends_on:
