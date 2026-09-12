@@ -189,13 +189,26 @@ def _even_groups(n_sentences: int, target_beats: int = 5) -> list[list[int]]:
     return groups
 
 
+def _fallback_query(text: str, max_len: int = 55) -> str:
+    """Used only when the model didn't supply a real visual_query for a beat (either a
+    per-beat miss, or the whole-script deterministic fallback below) — a real search
+    phrase beats a truncated sentence fragment, but even this fallback shouldn't cut a
+    word in half (a query search engines see less of, and a genuinely worse-looking
+    truncation if it ever surfaces in a UI). Trims to the last complete word within the
+    budget instead of a hard character slice."""
+    if len(text) <= max_len:
+        return text
+    truncated = text[:max_len]
+    return truncated.rsplit(" ", 1)[0] if " " in truncated else truncated
+
+
 def _beats_from_groups(sentences: list[str], groups: list[list[int]], raw_beats: list[dict]) -> list[dict] | None:
     beats = []
     for group, meta in zip(groups, raw_beats):
         text = " ".join(sentences[i] for i in group)
         query = (meta.get("visual_query") or "").strip()
         entity_type = meta.get("entity_type") if meta.get("entity_type") in ENTITY_TYPES else "scene"
-        beats.append({"text": text, "visual_query": query or text[:60], "entity_type": entity_type})
+        beats.append({"text": text, "visual_query": query or _fallback_query(text), "entity_type": entity_type})
     return beats if all(b["visual_query"] for b in beats) else None
 
 
@@ -226,10 +239,25 @@ def write_beats(sentences: list[str], max_attempts: int = 3) -> list[dict]:
             if beats is not None:
                 return beats
 
+    # Silent until now: this path means the model failed beat-grouping validation on
+    # every attempt, so every beat loses real entity_type detection AND gets a truncated
+    # sentence fragment as its visual search query instead of a real one — exactly the
+    # "generic AI video" quality regression the beats system exists to prevent, just
+    # reintroduced via this fallback. Caught by manually inspecting a generation's
+    # timeline during a creative-quality review (see Claude outputs/QUALITY_BAR.md) with
+    # no log trail explaining why the sourcing looked generic. Printed here so it shows
+    # up in job_manager's captured generation log — a real fix (better prompt, more
+    # retries, a repair pass) needs to know how often this actually fires first.
+    print(
+        f"[generate_script] beat-grouping fallback: model failed validation on all "
+        f"{max_attempts} attempts, falling back to flat even-split with generic scene "
+        f"queries — sourcing quality for this generation will be degraded",
+        file=sys.stderr,
+    )
     return [
         {
             "text": (text := " ".join(sentences[i] for i in group)),
-            "visual_query": text[:60],
+            "visual_query": _fallback_query(text),
             "entity_type": "scene",
         }
         for group in _even_groups(len(sentences))

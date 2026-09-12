@@ -87,6 +87,25 @@ def test_write_beats_fallback_reconstructs_narration(monkeypatch):
     assert all(b["entity_type"] == "scene" for b in beats)
 
 
+def test_fallback_query_trims_to_a_whole_word_not_mid_word():
+    """Real bug caught during a creative-quality review (Claude outputs/OPEN_ISSUES.md
+    #23): the old text[:60] hard slice regularly cut a word in half, and — combined with
+    the fallback firing whenever the model fails beat-grouping validation — produced
+    badly generic/truncated search queries that sourced visibly wrong stock footage."""
+    text = "Initially, the stone was seen as just a curiosity, but with the deciphering"
+    query = gs._fallback_query(text, max_len=55)
+    assert text.startswith(query)
+    assert len(query) <= 55
+    assert not query.endswith("decip")  # the exact mid-word cut this fixes
+    # the character right after the query in the original text is a space (or the
+    # string ended) — confirms the cut landed on a real word boundary
+    assert text[len(query):len(query) + 1] in (" ", "")
+
+
+def test_fallback_query_short_text_is_unchanged():
+    assert gs._fallback_query("A short sentence.", max_len=55) == "A short sentence."
+
+
 def test_write_beats_accepts_valid_model_output(monkeypatch):
     def _good_chat_json(*a, **k):
         return {
