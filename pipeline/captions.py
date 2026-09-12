@@ -120,6 +120,22 @@ def _chunk_words(words: list[dict], font: dict) -> list[list[dict]]:
     return chunks
 
 
+def build_caption_track(words: list[dict], font: dict) -> list[dict]:
+    """The same on-screen chunking build_ass() uses, shaped as timeline data instead of
+    burned into an .ass file — the editor's caption track. Kept here (not re-derived
+    elsewhere) so there's exactly one place chunk boundaries are decided."""
+    track = []
+    for i, chunk in enumerate(_chunk_words(words, font)):
+        track.append({
+            "id": f"cap_{i:02d}",
+            "text": " ".join(w["word"] for w in chunk),
+            "start": round(chunk[0]["start"], 3),
+            "end": round(chunk[-1]["end"], 3),
+            "emphasis": any(_is_emphasis(w["word"]) for w in chunk),
+        })
+    return track
+
+
 def build_ass(words: list[dict], out_path: str, font: dict | None = None) -> None:
     font = font or pick_font()
     lines = [_ass_header(font)]
@@ -133,7 +149,16 @@ def build_ass(words: list[dict], out_path: str, font: dict | None = None) -> Non
                     text = text.upper()
                 if j == i:
                     color = EMPHASIS_COLOR if _is_emphasis(w["word"]) else ACCENT_COLOR
-                    parts.append(f"{{\\c{color}}}{text}{{\\c{WHITE}}}")
+                    # Pop-in: the word starts slightly enlarged and springs down to 100%
+                    # over 140ms. \t's timing is relative to this Dialogue line's own
+                    # start, which is exactly this word's own start — so the pop lands
+                    # right as it becomes active, not offset from it. Reset scale
+                    # immediately after so it doesn't bleed into the words that follow
+                    # in the same line.
+                    parts.append(
+                        f"{{\\c{color}\\fscx130\\fscy130\\t(0,140,\\fscx100\\fscy100)}}{text}"
+                        f"{{\\c{WHITE}\\fscx100\\fscy100}}"
+                    )
                 else:
                     parts.append(text)
             line_text = " ".join(parts)

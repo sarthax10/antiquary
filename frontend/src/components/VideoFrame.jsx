@@ -26,6 +26,7 @@ const VideoFrame = forwardRef(function VideoFrame({ story, stamp, className = ""
           src={videoUrl(story.id)}
           ariaLabel={`Video: ${story.title || "Untitled"}`}
           onError={() => setFailed(true)}
+          chapters={story.chapters}
         />
       )}
       {stamp && (

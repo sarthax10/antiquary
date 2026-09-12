@@ -64,6 +64,40 @@ job" invariant regardless of process/thread races; gunicorn itself runs a single
 (with threads) so that invariant and Flask-Limiter's rate-limit store are both correct
 without needing Redis.
 
+## Timeline (editor data model)
+
+`Story.timeline` (JSONB, added in migration `570ffe36b382`, built by `pipeline/
+timeline.py`) is the foundation for the upcoming timeline editor — a structured,
+addressable representation of a story's edit, not just a final rendered MP4:
+
+```json
+{
+  "version": 1,
+  "duration": 42.3,
+  "tracks": {
+    "visual":    [{"id","kind":"video"|"image","start","duration","entity_type","visual_query","face","source"}],
+    "narration": [{"id","start","duration","text"}],
+    "captions":  [{"id","text","start","end","emphasis"}],
+    "music":     {"volume"} | null
+  },
+  "style": {"caption_font","caption_uppercase","voice"}
+}
+```
+
+One clip/cue per beat, in the same order `pipeline/generate_script.py`'s beats and
+`pipeline/tts.py`'s per-beat audio already produce — this generalizes what the
+auto-pipeline does today rather than replacing it. `pipeline/render.py` does **not**
+read this yet; it still consumes beats/audio/captions directly, so today's behavior is
+byte-for-byte unaffected. It carries no asset URLs — individual beat clips are local
+temp files during a run, not durably stored per-clip anywhere (only the final video is,
+to MinIO) — durable per-clip storage is real, separate follow-up work for whenever the
+editor needs to re-fetch/re-render one clip on its own.
+
+The plan (not yet built): a timeline editor UI reading/writing this JSON, `render.py`
+generalized to render *a* timeline (not just the auto-generated one), and AI-assisted
+edits (single operations, then natural-language chat) that patch this structure instead
+of regenerating the whole video.
+
 ## Package layout
 
 ```
@@ -109,10 +143,16 @@ pipeline/                    video generation, independent of the web app
                                (Wikidata P18) before any generic stock fallback
   tts.py                       one narration clip per beat (exact per-beat duration,
                                no approximation), concatenated for the full track
-  captions.py                  word-level captions + the on-screen title card, both
-                               burned in via the same .ass/libass pass
+  captions.py                  word-level karaoke captions (kinetic pop-in per word,
+                               one of a few real installed fonts per video — see
+                               pipeline/assets/fonts/), burned in via .ass/libass
   render.py                    per-beat cut timing, face-aware Ken Burns, grade/grain,
-                               optional ducked music bed
+                               optional ducked music bed (pipeline/assets/music/)
+  timeline.py                  builds Story.timeline — the editable project
+                               representation (visual/narration/caption/music tracks)
+                               the upcoming timeline editor reads/writes. Nothing
+                               renders from it yet; render.py still consumes beats/
+                               audio/captions directly. Purely additive foundation.
 migrations/                  Alembic
 docs/                        this file, DEPLOYMENT.md, SERVER_SETUP.md
 tests/                        pytest — ownership scoping, the generation queue, and the

@@ -242,3 +242,9 @@ export const IconUser = (p) => (
     <path d="M4.5 20.5c.8-3.9 3.7-6 7.5-6s6.7 2.1 7.5 6" />
   </Svg>
 );
+export const IconPip = (p) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="1.5" />
+    <rect x="12.5" y="11.5" width="7" height="5" rx="1" fill="currentColor" stroke="none" />
+  </Svg>
+);

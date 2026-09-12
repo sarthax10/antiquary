@@ -30,6 +30,11 @@ def _story_json(story: Story, include_video_url: bool = False) -> dict:
     }
     if include_video_url:
         data["video_url"] = service.video_url(story)
+        # Chapter markers for the player's scrubber — just clip start times, not the
+        # whole editor timeline (visual_query/entity_type/etc aren't needed here and
+        # story.timeline is empty {} for anything rendered before it existed).
+        visual_track = (story.timeline or {}).get("tracks", {}).get("visual") or []
+        data["chapters"] = [clip["start"] for clip in visual_track]
     return data
 
 

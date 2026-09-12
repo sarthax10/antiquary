@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useRef, useState } from "react";
-import { IconCompress, IconExpand, IconPause, IconPlay, IconVolume, IconVolumeMute } from "./icons";
+import { IconCompress, IconExpand, IconPause, IconPip, IconPlay, IconVolume, IconVolumeMute } from "./icons";
 
 function fmt(t) {
   if (!Number.isFinite(t) || t < 0) return "0:00";
@@ -7,6 +7,8 @@ function fmt(t) {
   const s = Math.floor(t % 60);
   return `${m}:${String(s).padStart(2, "0")}`;
 }
+
+const SPEEDS = [1, 1.25, 1.5, 2, 0.75];
 
 /**
  * A themed video player. The <video> itself stays real and focusable (no `controls`
@@ -19,7 +21,10 @@ function fmt(t) {
  * move to the next/previous story (see useHotkeys in pages/Review.jsx), and a player
  * that silently stole them here would be a confusing, hard-to-notice conflict.
  */
-const VideoPlayer = forwardRef(function VideoPlayer({ src, ariaLabel, onError, autoPlay = false, className = "" }, outerRef) {
+const VideoPlayer = forwardRef(function VideoPlayer(
+  { src, ariaLabel, onError, autoPlay = false, className = "", chapters = [] },
+  outerRef
+) {
   const videoRef = useRef(null);
   const wrapRef = useRef(null);
   const hideTimer = useRef(null);
@@ -32,6 +37,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ src, ariaLabel, onError, a
   const [barAwake, setBarAwake] = useState(true);
   const [scrubbing, setScrubbing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [pipActive, setPipActive] = useState(false);
+  const pipSupported = typeof document !== "undefined" && document.pictureInPictureEnabled;
 
   const setVideoRef = useCallback(
     (node) => {
@@ -59,6 +67,19 @@ const VideoPlayer = forwardRef(function VideoPlayer({ src, ariaLabel, onError, a
     document.addEventListener("fullscreenchange", onFsChange);
     return () => document.removeEventListener("fullscreenchange", onFsChange);
   }, []);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return undefined;
+    const onEnter = () => setPipActive(true);
+    const onLeave = () => setPipActive(false);
+    v.addEventListener("enterpictureinpicture", onEnter);
+    v.addEventListener("leavepictureinpicture", onLeave);
+    return () => {
+      v.removeEventListener("enterpictureinpicture", onEnter);
+      v.removeEventListener("leavepictureinpicture", onLeave);
+    };
+  }, [src]);
 
   function toggle() {
     const v = videoRef.current;
@@ -103,6 +124,26 @@ const VideoPlayer = forwardRef(function VideoPlayer({ src, ariaLabel, onError, a
   function toggleFullscreen() {
     if (document.fullscreenElement) document.exitFullscreen?.();
     else wrapRef.current?.requestFullscreen?.();
+  }
+
+  function cycleSpeed() {
+    // Functional form deliberately: reads the latest committed speed even if two clicks
+    // land in the same batched update, instead of both computing "next" from the same
+    // stale closure value and only actually advancing one step.
+    setSpeed((prev) => {
+      const next = SPEEDS[(SPEEDS.indexOf(prev) + 1) % SPEEDS.length];
+      if (videoRef.current) videoRef.current.playbackRate = next;
+      return next;
+    });
+  }
+
+  async function togglePip() {
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else await videoRef.current?.requestPictureInPicture?.();
+    } catch {
+      // PiP can refuse (e.g. mid-metadata-load) — nothing useful to recover here.
+    }
   }
 
   const pct = duration ? Math.min(100, (current / duration) * 100) : 0;
@@ -160,6 +201,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({ src, ariaLabel, onError, a
           <span className="vplayer-scrub-track" aria-hidden="true">
             <span className="vplayer-scrub-buffer" style={{ width: `${bufPct}%` }} />
             <span className="vplayer-scrub-fill" style={{ width: `${pct}%` }} />
+            {duration > 0 && chapters.filter((t) => t > 0).map((t) => (
+              <span key={t} className="vplayer-scrub-chapter" style={{ left: `${(t / duration) * 100}%` }} />
+            ))}
           </span>
           <input
             type="range"
@@ -193,6 +237,16 @@ const VideoPlayer = forwardRef(function VideoPlayer({ src, ariaLabel, onError, a
             aria-label="Volume"
           />
         </div>
+
+        <button type="button" className="vplayer-btn vplayer-speed" onClick={cycleSpeed} aria-label={`Playback speed, currently ${speed}×`}>
+          {speed}×
+        </button>
+
+        {pipSupported && (
+          <button type="button" className="vplayer-btn vplayer-pip" onClick={togglePip} aria-label={pipActive ? "Exit picture-in-picture" : "Picture-in-picture"} aria-pressed={pipActive}>
+            <IconPip />
+          </button>
+        )}
 
         <button type="button" className="vplayer-btn" onClick={toggleFullscreen} aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}>
           {fullscreen ? <IconCompress /> : <IconExpand />}

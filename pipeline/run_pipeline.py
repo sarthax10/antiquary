@@ -29,6 +29,7 @@ import enqueue_story
 import fetch_visuals
 import generate_script
 import render
+import timeline as timeline_module
 import tts
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -53,15 +54,17 @@ def run(topic: str) -> str:
     assets = fetch_visuals.fetch_all(str(visuals_dir), script["beats"])
 
     job_manager.set_stage("recording_narration")
+    voice = tts.pick_voice()
     audio_dir = work_dir / "audio"
-    beat_audio = asyncio.run(tts.synthesize_beats(script["beats"], audio_dir))
+    beat_audio = asyncio.run(tts.synthesize_beats(script["beats"], audio_dir, voice=voice))
     narration_path = work_dir / "narration.mp3"
     tts.concat_audio([b["path"] for b in beat_audio], str(narration_path))
 
     job_manager.set_stage("generating_captions")
+    font = captions.pick_font()
     words = captions.transcribe_words(str(narration_path))
     ass_path = work_dir / "captions.ass"
-    captions.build_ass(words, str(ass_path))
+    captions.build_ass(words, str(ass_path), font=font)
 
     job_manager.set_stage("rendering")
     video_path = work_dir / "final.mp4"
@@ -76,7 +79,17 @@ def run(topic: str) -> str:
     ]
     render.render(str(narration_path), str(ass_path), str(video_path), beats_final)
 
-    return enqueue_story.enqueue(str(video_path), str(script_path), topic)
+    story_timeline = timeline_module.build_timeline(
+        beats=script["beats"],
+        assets=assets,
+        beat_audio=beat_audio,
+        caption_track=captions.build_caption_track(words, font),
+        font=font,
+        voice=voice,
+        music_volume=render.MUSIC_VOLUME if render.music_available() else None,
+    )
+
+    return enqueue_story.enqueue(str(video_path), str(script_path), topic, timeline=story_timeline)
 
 
 if __name__ == "__main__":

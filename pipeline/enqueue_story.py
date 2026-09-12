@@ -31,7 +31,7 @@ def _probe_duration(video_path: str) -> float | None:
         return None
 
 
-def enqueue(video_path: str, script_json_path: str, topic: str = "") -> str:
+def enqueue(video_path: str, script_json_path: str, topic: str = "", timeline: dict | None = None) -> str:
     script = json.loads(open(script_json_path).read())
     duration = _probe_duration(video_path)
 
@@ -53,6 +53,7 @@ def enqueue(video_path: str, script_json_path: str, topic: str = "") -> str:
         hook=script.get("hook", ""),
         narration=script.get("narration", ""),
         beats=[{k: b[k] for k in ("text", "visual_query", "entity_type")} for b in script.get("beats", [])],
+        timeline=timeline or {},
         fact_check=script.get("fact_check", {}),
         needs_human_review=script.get("needs_human_review", True),
         status="pending",

@@ -75,14 +75,24 @@ def _zoompan_expr(px: float, py: float, zoom_in: bool) -> tuple[str, str, str]:
     return z, x, y
 
 
+def _music_tracks() -> list[Path]:
+    if not MUSIC_DIR.is_dir():
+        return []
+    return [p for p in MUSIC_DIR.rglob("*.mp3") if p.is_file()]
+
+
 def _pick_music() -> Path | None:
     """Random track under pipeline/assets/music/ (see documentary/SOURCE.md for
     licensing — all CC0). A single flat mood pool for now; picking by topic/tone is a
     natural follow-up once there's more than a handful of tracks to choose between."""
-    if not MUSIC_DIR.is_dir():
-        return None
-    tracks = [p for p in MUSIC_DIR.rglob("*.mp3") if p.is_file()]
+    tracks = _music_tracks()
     return random.choice(tracks) if tracks else None
+
+
+def music_available() -> bool:
+    """Whether a music bed will be mixed in at all — for timeline.py to record without
+    reaching into the private track-picking helper above just to check a boolean."""
+    return bool(_music_tracks())
 
 
 def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict]) -> None:
