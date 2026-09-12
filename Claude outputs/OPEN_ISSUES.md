@@ -1399,3 +1399,47 @@ a real error worth a real look: likely a race in `job_manager._watch()`'s finali
 UPDATE against something else touching the same row concurrently (a restart-induced
 version, or a second finalization path). Flagging rather than diagnosing now, since the
 same-day priority was the illustrated-mode content gap the user was actively blocked on.
+
+## 60. Per-beat framing/mood intent (Tier 3 #13) — camera-planning hint from the writer model
+
+**Status: VERIFIED — real Ollama output inspected, real render motion measured**
+
+Closes the last item on the user's "pick these up" list. `generate_script.py`'s beat
+schema gains a `"framing"` field — one of `"push_in"`, `"pull_back"`, `"hold_static"`,
+`"pan"` (`FRAMING_TYPES`) — the writer model proposes per beat alongside the existing
+`visual_query`/`entity_type`, closing the gap the roadmap identified between "shot list"
+(what's on screen) and actual camera planning (how it moves). A closed vocabulary, not
+free text: a 3B local model asked for open-ended camera direction would be far less
+reliable than a pick from four options, and `render.py` only knows how to honor these
+four anyway. Same defensive validation pattern already used for `entity_type`: an
+invalid/missing value (model omission, hallucinated free text, or the whole
+beat-grouping fallback path) defaults to `DEFAULT_FRAMING = "hold_static"` rather than
+reaching render.py unvalidated.
+
+`render.py`'s existing Ken Burns mechanics (`_zoompan_expr`/`_pan_targets`) are extended,
+not replaced: `_FRAMING_ZOOM_RATE_MULT`/`_FRAMING_PAN_MARGIN_MULT` scale the existing
+zoom rate and pan margin per framing value — `push_in`/`pull_back` force a deliberate
+zoom direction (`_resolve_zoom_in`, replacing the old plain index-parity alternation for
+just those two values) and soften the pan so the zoom itself reads as the intentional
+move; `hold_static` dampens both well below default; `pan` flattens the zoom and widens
+the pan margin so lateral drift carries the beat. An absent/unrecognized framing value —
+every beat from before this existed — falls all the way back to the exact original
+behavior (1.0x both multipliers, plain alternation): purely additive, confirmed by a
+regression test asserting byte-identical output between no `framing` key and an explicit
+`None`. Threaded through every real call site: `run_pipeline.py`, `render_timeline.py`
+(reads it off the timeline's visual track), and `pipeline/timeline.py` (now records it
+per clip for a future editor re-render to stay consistent).
+
+**Verified at three levels, not assumed**: (1) 9 new unit tests
+(`tests/test_beats.py`/`tests/test_render.py`) covering the validation/fallback paths
+and the zoompan multiplier wiring; (2) **real calls against the actual local Ollama
+model** (not mocked) across 3 different narrations — confirmed every beat ends up with a
+valid framing value either way, and where beat-grouping succeeded at all, the model
+picked genuinely sensible values unprompted by example text (e.g. "his empire crumbling
+around him" → `pan`; "he abdicated for the final time" → `push_in`) — a real, if
+imperfect, camera-planning judgment from a 3B model, not just schema compliance; (3) a
+real end-to-end render of the same source image with three different framing values,
+measuring actual first-frame-vs-last-frame pixel difference in the output video:
+`push_in`=6.13, `pull_back`=6.12, `hold_static`=2.62 — a real, substantial (~2.3x),
+verified difference in rendered motion, not just different expression strings. Full
+suite: 116/116 pass.

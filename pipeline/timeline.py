@@ -45,6 +45,7 @@ def build_timeline(
             "duration": round(duration, 3),
             "entity_type": asset["entity_type"],
             "visual_query": beat["visual_query"],
+            "framing": beat.get("framing", "hold_static"),
             "face": asset["face"],
             "source": asset["source"],
         })

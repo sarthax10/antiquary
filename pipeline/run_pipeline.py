@@ -170,6 +170,7 @@ def run(topic: str, visual_style: str = "photographic") -> str:
                 "duration": audio["duration"],
                 "text": audio["text"],
                 "visual_query": audio.get("visual_query", ""),
+                "framing": audio.get("framing", generate_script.DEFAULT_FRAMING),
             }
             for asset, audio in zip(assets, beat_audio)
         ]

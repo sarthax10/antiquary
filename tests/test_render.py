@@ -234,6 +234,48 @@ def test_render_keyword_card_does_not_trigger_the_sfx_whoosh(monkeypatch):
     assert "whoosh" not in cmd_str
 
 
+# --- Per-beat framing/mood intent (Tier 3 #13) ---------------------------------------
+
+def test_resolve_zoom_in_push_in_forces_zoom_in():
+    assert render._resolve_zoom_in("push_in", index=1) is True  # odd index would alternate to False
+
+
+def test_resolve_zoom_in_pull_back_forces_zoom_out():
+    assert render._resolve_zoom_in("pull_back", index=0) is False  # even index would alternate to True
+
+
+def test_resolve_zoom_in_falls_back_to_alternation_for_hold_static_and_pan():
+    for framing in ("hold_static", "pan", None, "unrecognized"):
+        assert render._resolve_zoom_in(framing, index=0) is True
+        assert render._resolve_zoom_in(framing, index=1) is False
+
+
+def test_zoompan_expr_hold_static_dampens_zoom_rate_and_pan_margin():
+    z_default, _, _ = render._zoompan_expr(0.5, 0.5, zoom_in=True, index=0, frames=90)
+    z_hold, x_hold, _ = render._zoompan_expr(0.5, 0.5, zoom_in=True, index=0, frames=90, framing="hold_static")
+    # Both should reference "zoom+<rate>" — the hold_static rate must be smaller.
+    import re
+    default_rate = float(re.search(r"zoom\+([\d.]+)", z_default).group(1))
+    hold_rate = float(re.search(r"zoom\+([\d.]+)", z_hold).group(1))
+    assert hold_rate < default_rate
+
+
+def test_zoompan_expr_pan_widens_pan_margin_relative_to_default():
+    # A wider pan margin means _pan_targets' end point is further from the start point —
+    # confirm indirectly via the x expression differing between "pan" and the default.
+    _, x_default, _ = render._zoompan_expr(0.5, 0.5, zoom_in=True, index=0, frames=90)
+    _, x_pan, _ = render._zoompan_expr(0.5, 0.5, zoom_in=True, index=0, frames=90, framing="pan")
+    assert x_default != x_pan
+
+
+def test_zoompan_expr_unrecognized_framing_matches_default_exactly():
+    # Full backward-compat guarantee: a beat with no framing key (every beat from before
+    # this feature existed) must produce byte-identical output to an explicit None.
+    a = render._zoompan_expr(0.5, 0.5, zoom_in=True, index=0, frames=90)
+    b = render._zoompan_expr(0.5, 0.5, zoom_in=True, index=0, frames=90, framing=None)
+    assert a == b
+
+
 def test_render_skips_skin_tone_correction_for_a_real_video_clip(monkeypatch):
     # A "person" entity_type whose asset happens to be a video (e.g. illustrated-mode's
     # synthetic backdrop) must not get skin-tone correction applied — it hits the

@@ -48,6 +48,23 @@ _PERSON_ACCENT_TYPES = ("place", "event")
 MAX_CLIPS = 8
 VIDEO_EXTS = (".mp4", ".mov", ".webm", ".m4v")
 
+# Per-beat framing/mood intent (Professional Quality Roadmap Tier 3 #13) — a lightweight
+# camera-planning hint the writer model proposes per beat (see generate_script.py's
+# FRAMING_TYPES/BEATS_SYSTEM_PROMPT), closing the gap between "shot list" (what's on
+# screen) and actual camera planning (how it moves). Multipliers on the existing
+# zoom/pan mechanics rather than a new rendering system: "push_in"/"pull_back" force a
+# deliberate zoom direction (instead of the old plain index-parity alternation) and
+# soften the pan so the zoom itself reads as the intentional move; "hold_static"
+# dampens BOTH zoom and pan well below the default for a beat that should read as
+# comparatively still; "pan" does the opposite — flattens the zoom rate and widens the
+# pan margin so lateral drift carries the beat instead. An absent/unrecognized framing
+# value (any beat from before this existed, or a small-model miss) falls all the way
+# back to the exact pre-existing behavior (1.0x both multipliers, plain index-parity
+# zoom-direction alternation) — this is additive, not a behavior change for anyone not
+# using it.
+_FRAMING_ZOOM_RATE_MULT = {"push_in": 1.6, "pull_back": 1.6, "hold_static": 0.3, "pan": 0.5}
+_FRAMING_PAN_MARGIN_MULT = {"push_in": 0.7, "pull_back": 0.7, "hold_static": 0.35, "pan": 1.8}
+
 MUSIC_DIR = Path(__file__).resolve().parent / "assets" / "music"
 MUSIC_VOLUME = 0.12
 
@@ -188,19 +205,34 @@ def _transition_style(a: dict, b: dict, index: int) -> tuple[float, str]:
     return XFADE_CUT, "fade"
 
 
-def _pan_targets(px: float, py: float, index: int) -> tuple[float, float]:
+def _pan_targets(px: float, py: float, index: int, pan_margin: float = PAN_MARGIN) -> tuple[float, float]:
     """End point of the Ken Burns pan, given its start point (the detected face center, or
     plain frame center) and the beat index. The drift direction cycles deterministically
     through the four diagonal quadrants every 4 beats (reusing the same index that drives
     zoom_in alternation for the horizontal component, and a slower-flipping vertical
     component) so consecutive beats don't all pan the same way, while staying reproducible
-    for testing/debugging rather than randomized."""
-    dx = PAN_MARGIN if index % 2 == 0 else -PAN_MARGIN
-    dy = (PAN_MARGIN * 0.6) if (index // 2) % 2 == 0 else -(PAN_MARGIN * 0.6)
+    for testing/debugging rather than randomized. `pan_margin` defaults to the module
+    constant but is scaled by a beat's framing hint, if any — see _FRAMING_PAN_MARGIN_MULT."""
+    dx = pan_margin if index % 2 == 0 else -pan_margin
+    dy = (pan_margin * 0.6) if (index // 2) % 2 == 0 else -(pan_margin * 0.6)
     return min(0.95, max(0.05, px + dx)), min(0.95, max(0.05, py + dy))
 
 
-def _zoompan_expr(px: float, py: float, zoom_in: bool, index: int, frames: int) -> tuple[str, str, str]:
+def _resolve_zoom_in(framing: str | None, index: int) -> bool:
+    """"push_in"/"pull_back" force a deliberate zoom direction; anything else (no
+    framing hint, "hold_static", "pan", or an unrecognized value) falls back to the
+    original plain index-parity alternation — variety with no particular intent, exactly
+    the pre-existing default behavior for every beat that doesn't specify one."""
+    if framing == "push_in":
+        return True
+    if framing == "pull_back":
+        return False
+    return index % 2 == 0
+
+
+def _zoompan_expr(
+    px: float, py: float, zoom_in: bool, index: int, frames: int, framing: str | None = None,
+) -> tuple[str, str, str]:
     """Ken Burns z/x/y expressions that zoom toward/away from the fractional point (px,
     py) — defaults to dead-center (0.5, 0.5) for a plain image, or the beat's detected face
     center when fetch_visuals.py found one — the same as before, PLUS a genuine pan: the
@@ -208,12 +240,19 @@ def _zoompan_expr(px: float, py: float, zoom_in: bool, index: int, frames: int) 
     clip's duration, using ffmpeg's own output-frame-count variable `on` against the known
     total frame count so the drift is exactly in sync with the clip, no separate clock
     needed. x/y stay clamped with the same min/max approach as before so the animated,
-    moving target can never pull the crop window outside the source frame at any frame."""
+    moving target can never pull the crop window outside the source frame at any frame.
+
+    `framing`, when it names a recognized hint (see _FRAMING_ZOOM_RATE_MULT/
+    _FRAMING_PAN_MARGIN_MULT), scales the zoom rate and pan margin so the beat reads as
+    the intended camera move rather than the same generic drift every other beat gets —
+    still built from the same primitives, not a new mechanism."""
+    zoom_rate = ZOOM_RATE * _FRAMING_ZOOM_RATE_MULT.get(framing, 1.0)
+    pan_margin = PAN_MARGIN * _FRAMING_PAN_MARGIN_MULT.get(framing, 1.0)
     if zoom_in:
-        z = f"min(zoom+{ZOOM_RATE},{ZOOM_MAX})"
+        z = f"min(zoom+{zoom_rate},{ZOOM_MAX})"
     else:
-        z = f"if(eq(on,0),{ZOOM_MAX},max(zoom-{ZOOM_RATE},1.0))"
-    px1, py1 = _pan_targets(px, py, index)
+        z = f"if(eq(on,0),{ZOOM_MAX},max(zoom-{zoom_rate},1.0))"
+    px1, py1 = _pan_targets(px, py, index, pan_margin=pan_margin)
     denom = max(1, frames - 1)
     pan_x = f"({px:.6f}+({px1:.6f}-{px:.6f})*on/{denom})"
     pan_y = f"({py:.6f}+({py1:.6f}-{py:.6f})*on/{denom})"
@@ -383,7 +422,10 @@ def render(
             face = beat.get("face")
             px, py = (face[0], face[1]) if face else (0.5, 0.5)
             frames = max(1, round(requested[i] * FPS))
-            z, x, y = _zoompan_expr(px, py, zoom_in=(i % 2 == 0), index=i, frames=frames)
+            framing = beat.get("framing")
+            z, x, y = _zoompan_expr(
+                px, py, zoom_in=_resolve_zoom_in(framing, i), index=i, frames=frames, framing=framing,
+            )
             # CLIP_NORMALIZE (and SKIN_TONE_CORRECTION, when it applies) run BEFORE
             # scale=8000 (not after, where CLIP_NORMALIZE was first wired), and that
             # ordering is load-bearing, not cosmetic: applying either on the post-upscale

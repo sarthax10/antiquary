@@ -46,6 +46,16 @@ FACTCHECK_MODEL = os.environ.get("OLLAMA_FACTCHECK_MODEL") or OLLAMA_MODEL
 
 ENTITY_TYPES = ("person", "place", "artifact", "event", "scene")
 
+# Per-beat camera-planning hint (Professional Quality Roadmap Tier 3 #13) — closes the
+# gap between "shot list" (what's on screen, already covered by visual_query/
+# entity_type) and actual camera planning (how it moves). A small, closed vocabulary the
+# writer model picks from, not free text: a 3B local model asked for open-ended camera
+# direction would be far less reliable than a multiple-choice pick, and render.py
+# (_FRAMING_ZOOM_RATE_MULT/_FRAMING_PAN_MARGIN_MULT) only knows how to honor these four
+# values anyway — anything else falls back to the pre-existing plain alternation.
+FRAMING_TYPES = ("push_in", "pull_back", "hold_static", "pan")
+DEFAULT_FRAMING = "hold_static"
+
 WRITER_SYSTEM_PROMPT = """You write scripts for 30-45 second vertical history short-form videos \
 (Instagram Reels / YouTube Shorts). Pick ONE narrow, specific, surprising true historical \
 detail or story — not a generic "5 facts about X" list. Write for a viewer who will decide \
@@ -87,15 +97,26 @@ never vague phrases like "ancient times" or "history concept")
 - "entity_type": one of "person", "place", "artifact", "event", "scene" — use "person" ONLY when \
 the visual_query names a specific real individual whose actual likeness/portrait should be \
 shown, not a generic or anonymous figure
+- "framing": one of "push_in" (a moment of emotional weight, tension, or revelation — pushing \
+closer draws the viewer in), "pull_back" (a wide establishing shot, an aftermath, or a sense of \
+scale/isolation), "pan" (the beat describes travel, motion, or a journey across space), or \
+"hold_static" (the default — use this whenever none of the other three clearly applies; most \
+beats should be "hold_static")
 
 Example, for a 6-sentence narration all about the same person: \
-{"beats": [{"sentences": [1], "visual_query": "Marie Curie portrait", "entity_type": "person"}, \
-{"sentences": [2,3], "visual_query": "Curie laboratory Paris", "entity_type": "place"}, \
-{"sentences": [4], "visual_query": "radium glowing vial", "entity_type": "artifact"}, \
-{"sentences": [5,6], "visual_query": "Nobel Prize ceremony 1903", "entity_type": "event"}]} \
-— four beats, one static subject, still four different things shown on screen.
+{"beats": [{"sentences": [1], "visual_query": "Marie Curie portrait", "entity_type": "person", \
+"framing": "hold_static"}, \
+{"sentences": [2,3], "visual_query": "Curie laboratory Paris", "entity_type": "place", \
+"framing": "pan"}, \
+{"sentences": [4], "visual_query": "radium glowing vial", "entity_type": "artifact", \
+"framing": "push_in"}, \
+{"sentences": [5,6], "visual_query": "Nobel Prize ceremony 1903", "entity_type": "event", \
+"framing": "pull_back"}]} \
+— four beats, one static subject, still four different things shown on screen and a distinct \
+camera intent for each.
 
-Return ONLY valid JSON: {"beats": [{"sentences": [...], "visual_query": "...", "entity_type": "..."}, ...]}
+Return ONLY valid JSON: {"beats": [{"sentences": [...], "visual_query": "...", "entity_type": "...", \
+"framing": "..."}, ...]}
 Every sentence number from 1 up to the last one must appear in exactly one beat, covering all of \
 them in increasing order across beats. No commentary, no markdown, just the JSON object."""
 
@@ -216,7 +237,17 @@ def _beats_from_groups(sentences: list[str], groups: list[list[int]], raw_beats:
         text = " ".join(sentences[i] for i in group)
         query = (meta.get("visual_query") or "").strip()
         entity_type = meta.get("entity_type") if meta.get("entity_type") in ENTITY_TYPES else "scene"
-        beats.append({"text": text, "visual_query": query or _fallback_query(text), "entity_type": entity_type})
+        # Same defensive pattern as entity_type: a small local model asked for a closed
+        # vocabulary still occasionally omits the field or returns something outside it
+        # (free text, wrong case, a hallucinated value) — fall back to the safe default
+        # rather than let an invalid value reach render.py (which would just silently
+        # ignore it via its own .get(framing, 1.0) fallback anyway, but validating here
+        # keeps the beat schema itself honest about what values actually mean something).
+        framing = meta.get("framing") if meta.get("framing") in FRAMING_TYPES else DEFAULT_FRAMING
+        beats.append({
+            "text": text, "visual_query": query or _fallback_query(text),
+            "entity_type": entity_type, "framing": framing,
+        })
     return beats if all(b["visual_query"] for b in beats) else None
 
 
@@ -267,6 +298,7 @@ def write_beats(sentences: list[str], max_attempts: int = 3) -> list[dict]:
             "text": (text := " ".join(sentences[i] for i in group)),
             "visual_query": _fallback_query(text),
             "entity_type": "scene",
+            "framing": DEFAULT_FRAMING,
         }
         for group in _even_groups(len(sentences))
     ]

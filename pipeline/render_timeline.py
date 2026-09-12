@@ -63,6 +63,7 @@ def render_from_timeline(timeline: dict, out_path: str, visual_style: str = "pho
                 "duration": audio["duration"],
                 "text": audio.get("text", ""),
                 "visual_query": visual.get("visual_query", ""),
+                "framing": visual.get("framing", "hold_static"),
             })
 
         narration_path = tmp_dir / "narration.mp3"

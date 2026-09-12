@@ -123,6 +123,51 @@ def test_write_beats_accepts_valid_model_output(monkeypatch):
     assert beats[1]["text"] == "Two. Three."
 
 
+# --- Per-beat framing/mood intent (Professional Quality Roadmap Tier 3 #13) ----------
+
+def test_write_beats_accepts_valid_framing_from_model(monkeypatch):
+    def _good_chat_json(*a, **k):
+        return {
+            "beats": [
+                {"sentences": [1], "visual_query": "a portrait", "entity_type": "person", "framing": "push_in"},
+                {"sentences": [2], "visual_query": "a wide shot", "entity_type": "place", "framing": "pull_back"},
+            ]
+        }
+
+    monkeypatch.setattr(gs, "_chat_json", _good_chat_json)
+    beats = gs.write_beats(["One.", "Two."], max_attempts=1)
+    assert [b["framing"] for b in beats] == ["push_in", "pull_back"]
+
+
+def test_write_beats_defaults_framing_when_model_omits_it(monkeypatch):
+    def _good_chat_json(*a, **k):
+        return {"beats": [{"sentences": [1], "visual_query": "x", "entity_type": "scene"}]}
+
+    monkeypatch.setattr(gs, "_chat_json", _good_chat_json)
+    beats = gs.write_beats(["One."], max_attempts=1)
+    assert beats[0]["framing"] == gs.DEFAULT_FRAMING
+
+
+def test_write_beats_defaults_framing_when_model_hallucinates_an_invalid_value(monkeypatch):
+    def _good_chat_json(*a, **k):
+        return {"beats": [{"sentences": [1], "visual_query": "x", "entity_type": "scene", "framing": "zoom really fast"}]}
+
+    monkeypatch.setattr(gs, "_chat_json", _good_chat_json)
+    beats = gs.write_beats(["One."], max_attempts=1)
+    assert beats[0]["framing"] == gs.DEFAULT_FRAMING
+
+
+def test_write_beats_fallback_path_also_sets_default_framing(monkeypatch):
+    # Same fallback exercised in test_write_beats_fallback_reconstructs_narration above —
+    # confirms it sets a safe, valid framing too, not just entity_type.
+    def _bad_chat_json(*a, **k):
+        return {"beats": [{"sentences": [1, 3], "visual_query": "x", "entity_type": "scene"}]}
+
+    monkeypatch.setattr(gs, "_chat_json", _bad_chat_json)
+    beats = gs.write_beats(["One.", "Two.", "Three.", "Four."], max_attempts=1)
+    assert all(b["framing"] == gs.DEFAULT_FRAMING for b in beats)
+
+
 def test_chunk_words_respects_character_budget():
     import captions
 
