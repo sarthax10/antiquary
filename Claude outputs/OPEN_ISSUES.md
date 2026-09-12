@@ -396,15 +396,43 @@ covering every beat, which would look busy rather than professional.
 
 ## 18. Sound effects
 
-**Status: OPEN**
+**Status: VERIFIED**
 
-Sourced CC0 SFX (same licensing discipline already used for the music bed — verify a
-clear CC0/public-domain license before downloading, document the source, same as
-`pipeline/assets/music/documentary/SOURCE.md`), used sparingly and ducked under
-narration/music: a soft whoosh on an accent transition or a motion-graphic reveal, not
-layered onto every cut. Scope as its own small pipeline addition (`pipeline/assets/sfx/`
-+ a mixing step in `render.py`), verified the same way as every other pipeline change —
-a real generation, frames/waveform inspected, not assumed.
+Shipped as a **generated**, not sourced, asset — `pipeline/generate_sfx.py` synthesizes
+`pipeline/assets/sfx/whoosh.mp3` from ffmpeg's own noise/filter primitives (two
+independent pink-noise bands, crossfaded via linear envelopes into a rising spectral
+sweep), the same "generate, don't source" approach already used for `motion_graphics.py`
+and the animated placeholder backdrop (#16). This wasn't the first plan — CC0 licensing
+discipline was applied first, same as the music bed: Kenney.nl's freely-scriptable CC0
+audio packs (`interface-sounds`, `impact-sounds`, `digital-audio`, all confirmed CC0 via
+their own license pages, downloaded and inspected) turned out to be uniformly
+game/sci-fi flavored (click/confirm/error/zap/laser/impact) with nothing resembling a
+soft cinematic whoosh, which would clash with this project's own "documentary, not
+content" bar even where something whoosh-adjacent existed; Freesound.org's per-file
+licenses can't be reliably verified/downloaded without a human in a browser; Pixabay's
+sound-effects section blocks non-browser fetches (403). Generating it sidesteps all of
+that with zero licensing risk — see `pipeline/assets/sfx/GENERATION.md` for the full
+reasoning and the exact synthesis method.
+
+Wired into `render.py` sparingly, on exactly two cue types, never on every cut: an
+**accent transition** (`"circleopen"`/`"radial"` — a named person entering/leaving frame
+relative to a place/event), timed to the middle of the crossfade; and a **motion-graphic
+reveal** (the year/timeline-marker overlay), timed just after that beat's clip begins.
+The final audio mix was refactored from a special-cased two-input `amix` (narration +
+optional music) into a generic N-branch `amix` (narration always, music/sfx branches
+added only when present) so "music only" / "sfx only" / "both" / "neither" are the same
+code path, not different ones.
+
+**Verified, not assumed**, at three levels: (1) the synthesized whoosh itself — decoded
+the real mp3 and computed an FFT-based spectral centroid across early/mid/late thirds,
+confirming a real, substantial, monotonic rise (2141→3445→4124Hz) and a genuine
+fade-in (not a click); (2) the cmd/filter-graph construction — 3 new unit tests
+(`tests/test_render.py`) confirm zero sfx wiring when no cue fires (hard-cut, no year
+label), and that both cue types independently add the `whoosh.mp3` input with the
+correct `adelay` offset; (3) a real end-to-end render with a beat that triggers both cue
+types in one video — decoded the actual output audio and confirmed real high-frequency
+transient energy at both expected cue timestamps (28-38x the energy of a quiet region
+elsewhere in the same clip) and nowhere else. Full suite: 90/90 pass.
 
 ## 19. Subtitle typography v2
 

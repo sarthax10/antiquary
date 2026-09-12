@@ -107,3 +107,70 @@ def test_music_tracks_prefers_the_matched_mood_directory():
     tense_tracks = render._music_tracks("tense")
     assert tense_tracks
     assert all(p.parent.name == "tense" for p in tense_tracks)
+
+
+# --- Sound-design accent cue wiring (#18/GENERATION.md) ------------------------------
+# render() itself shells out to real ffmpeg (verified separately, end-to-end, against
+# real waveform output — see the session notes in OPEN_ISSUES.md). These tests isolate
+# the *cmd/filter_complex construction* logic by faking subprocess.run: the ffprobe call
+# (get_audio_duration) returns a fixed duration, and the final ffmpeg call is captured
+# instead of executed, so we can assert on exactly what render() decided to build
+# without paying for a real encode or needing real media files on disk.
+
+class _FakeCompleted:
+    def __init__(self, stdout=""):
+        self.stdout = stdout
+
+
+def _capture_ffmpeg_cmd(monkeypatch, duration=6.0):
+    captured = {}
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[0] == "ffprobe":
+            return _FakeCompleted(stdout=str(duration))
+        captured["cmd"] = cmd
+        return _FakeCompleted()
+
+    monkeypatch.setattr(render.subprocess, "run", fake_run)
+    monkeypatch.setattr(render, "_pick_music", lambda beats=None: None)  # isolate sfx from music
+    return captured
+
+
+def test_render_adds_no_sfx_when_no_cue_is_triggered(monkeypatch):
+    captured = _capture_ffmpeg_cmd(monkeypatch)
+    beats = [
+        {"path": "a.jpg", "entity_type": "person", "face": None, "duration": 2.0,
+         "text": "Julius Caesar crossed the river."},
+        {"path": "b.jpg", "entity_type": "person", "face": None, "duration": 2.0,
+         "text": "Marcus Brutus made his choice."},  # different subject -> hard cut, no accent
+    ]
+    render.render("narration.mp3", "captions.ass", "out.mp4", beats)
+    cmd_str = " ".join(captured["cmd"])
+    assert "whoosh" not in cmd_str
+    assert "adelay" not in cmd_str
+
+
+def test_render_adds_sfx_on_a_year_label_reveal(monkeypatch):
+    captured = _capture_ffmpeg_cmd(monkeypatch)
+    beats = [
+        {"path": "a.jpg", "entity_type": "event", "face": None, "duration": 3.0,
+         "text": "In 1943, everything changed."},
+    ]
+    render.render("narration.mp3", "captions.ass", "out.mp4", beats)
+    cmd_str = " ".join(captured["cmd"])
+    assert "whoosh.mp3" in cmd_str
+    assert "adelay=delays=100:all=1" in cmd_str  # beat_start[0]=0.0 + the 0.1s reveal delay
+
+
+def test_render_adds_sfx_on_an_accent_transition(monkeypatch):
+    captured = _capture_ffmpeg_cmd(monkeypatch)
+    beats = [
+        {"path": "a.jpg", "entity_type": "person", "face": None, "duration": 3.0,
+         "text": "Napoleon Bonaparte planned his next move."},
+        {"path": "b.jpg", "entity_type": "place", "face": None, "duration": 3.0,
+         "text": "The battlefield stretched for miles."},
+    ]
+    render.render("narration.mp3", "captions.ass", "out.mp4", beats)
+    cmd_str = " ".join(captured["cmd"])
+    assert "whoosh.mp3" in cmd_str
+    assert "adelay" in cmd_str

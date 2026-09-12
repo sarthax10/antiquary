@@ -51,6 +51,16 @@ VIDEO_EXTS = (".mp4", ".mov", ".webm", ".m4v")
 MUSIC_DIR = Path(__file__).resolve().parent / "assets" / "music"
 MUSIC_VOLUME = 0.12
 
+# Sparing sound-design accent (see Claude outputs/OPEN_ISSUES.md #18 and
+# pipeline/assets/sfx/GENERATION.md) — a soft synthesized whoosh, never layered onto
+# every cut. Fired only on an accent transition (circleopen/radial) or a motion-graphic
+# reveal (see _accumulate_beat_starts/the sfx_cues collection in render()). Silently
+# skipped if the file is missing, same graceful-degradation convention as music.
+SFX_DIR = Path(__file__).resolve().parent / "assets" / "sfx"
+WHOOSH_PATH = SFX_DIR / "whoosh.mp3"
+SFX_VOLUME = 0.35
+_ACCENT_TRANSITIONS = ("circleopen", "radial")
+
 # Per-clip auto black/white-point correction, applied before the single shared creative
 # grade below — "correction before grading" (see Claude outputs/PROFESSIONAL_QUALITY_
 # ROADMAP.md §1.4/§7 Tier 1 #1). Our clips come from three unrelated origins (Wikidata
@@ -275,6 +285,28 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict], fon
         extra = (transitions[i - 1][0] / 2 if i > 0 else 0.0) + (transitions[i][0] / 2 if i < n - 1 else 0.0)
         requested.append(beat["duration"] + extra)
 
+    # Each beat's absolute start time in the final concatenated output, and each
+    # transition's *effective* (possibly short-first-beat-clamped) duration — computed
+    # once here so the xfade chain below and the sfx cue collection (both need the same
+    # numbers) can't drift apart into two independently-maintained copies of this math.
+    beat_start = [0.0] * n
+    effective_t = [0.0] * (n - 1)
+    _acc = requested[0]
+    for i in range(1, n):
+        t, _ = transitions[i - 1]
+        offset = _acc - t
+        if offset < 0:
+            t = max(0.0, _acc)
+            offset = 0.0
+        beat_start[i] = offset
+        effective_t[i - 1] = t
+        _acc += requested[i] - t
+
+    # Sound-design accent cues (see #18/GENERATION.md) — absolute seconds in the final
+    # output where a soft whoosh should fire. Collected below, sparingly: only on an
+    # accent transition or a motion-graphic reveal, never on every cut.
+    sfx_cues: list[float] = []
+
     cmd = ["ffmpeg", "-y"]
     for i, beat in enumerate(beats):
         path = beat["path"]
@@ -337,28 +369,20 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict], fon
             if overlay:
                 filter_parts.append(overlay)
                 labels[i] = f"v{i}o"
+                sfx_cues.append(beat_start[i] + 0.1)
 
     prev_label = labels[0]
-    acc_duration = requested[0]
     for i in range(1, n):
-        t, transition_name = transitions[i - 1]
-        offset = acc_duration - t
-        if offset < 0:
-            # The accumulated duration so far (in practice: beat 0's own padded duration,
-            # for the first transition) is shorter than half this transition's duration —
-            # a real case, not contrived: the writer prompt explicitly wants punchy,
-            # one-word hook lines, and a short first beat plus a normal crossfade can
-            # legitimately produce this. A negative offset is an invalid xfade argument
-            # (confirmed: ffmpeg rejects it) — shrink the transition to fit what's
-            # actually there instead of trusting the arithmetic blindly.
-            t = max(0.0, acc_duration)
-            offset = 0.0
+        _, transition_name = transitions[i - 1]
+        t = effective_t[i - 1]
+        offset = beat_start[i]
         out_label = f"x{i}"
         filter_parts.append(
             f"[{prev_label}][{labels[i]}]xfade=transition={transition_name}:duration={t:.3f}:offset={offset:.3f}[{out_label}]"
         )
         prev_label = out_label
-        acc_duration += requested[i] - t
+        if transition_name in _ACCENT_TRANSITIONS:
+            sfx_cues.append(offset + t / 2)
 
     # Fixed documentary-style grade + subtle vignette + film grain — applied once, after
     # the cut/crossfade chain and before captions burn in, so captions stay crisp on top
@@ -369,7 +393,22 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict], fon
     )
     filter_parts.append(f"[graded]subtitles={ass_path}[vout]")
 
-    audio_map = f"{audio_input_index}:a"  # a bare stream reference, no filter_complex label
+    # Sound-design accent (see #18/GENERATION.md) — added as one more ffmpeg input only
+    # if there's actually at least one cue and the asset exists, matching music's own
+    # graceful-degradation convention. Sits after the beat clips + narration + optional
+    # music inputs already appended to `cmd` above, so its index is whatever the next
+    # free slot is.
+    sfx_input_index = None
+    if sfx_cues and WHOOSH_PATH.is_file():
+        sfx_input_index = n + 1 + (1 if music_input_index is not None else 0)
+        cmd += ["-i", str(WHOOSH_PATH)]
+
+    # Every real audio source (narration always; music/sfx only if present) is mixed
+    # together in one amix rather than nested two-input mixes, so any combination of
+    # "music only" / "sfx only" / "both" / "neither" is just a longer or shorter branch
+    # list, not a different code path.
+    audio_branches = [f"[{audio_input_index}:a]"]
+
     if music_input_index is not None:
         # Mirror the fade-out with a fade-in — without this, music hit its full ducked
         # volume the instant the filter chain started, an audible hard cut on entry that
@@ -383,16 +422,43 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict], fon
             f"asetpts=PTS-STARTPTS,afade=t=in:st=0:d={fade_d:.3f},"
             f"afade=t=out:st={max(0, total_duration - fade_d):.3f}:d={fade_d:.3f}[music]"
         )
-        filter_parts.append(f"[{audio_input_index}:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]")
-        audio_map = "[aout]"  # now a filter_complex output label, needs brackets
+        audio_branches.append("[music]")
 
-    # Final loudness pass, after narration+music are already mixed — targets the same
-    # ~-14 LUFS YouTube itself normalizes to, so a video isn't further re-adjusted (and
-    # its dynamics squashed again) by the platform on top of whatever level we produced.
-    # audio_map is either a bare stream specifier ("2:a", no music) or an existing
-    # filter_complex output label ("[aout]", music mixed in) — normalize to bracket
-    # syntax either way, since a bare specifier used as a filter's own input inside
-    # filter_complex still needs brackets (only -map accepts the bare form).
+    if sfx_input_index is not None:
+        # adelay places each cue at its real absolute position in the final timeline;
+        # `all=1` applies the one delay value to every channel regardless of whether the
+        # source is mono or stereo. asplit is only needed once there's more than one cue
+        # to delay independently from the same short source clip.
+        cue_ms = [max(0, round(c * 1000)) for c in sfx_cues]
+        if len(cue_ms) == 1:
+            filter_parts.append(
+                f"[{sfx_input_index}:a]adelay=delays={cue_ms[0]}:all=1,volume={SFX_VOLUME}[sfx0]"
+            )
+            audio_branches.append("[sfx0]")
+        else:
+            splits = "".join(f"[sfxsrc{k}]" for k in range(len(cue_ms)))
+            filter_parts.append(f"[{sfx_input_index}:a]asplit={len(cue_ms)}{splits}")
+            for k, ms in enumerate(cue_ms):
+                filter_parts.append(
+                    f"[sfxsrc{k}]adelay=delays={ms}:all=1,volume={SFX_VOLUME}[sfx{k}]"
+                )
+                audio_branches.append(f"[sfx{k}]")
+
+    if len(audio_branches) > 1:
+        # duration=first: the output is trimmed/held to the *first* branch's length,
+        # which is always the narration branch (audio_branches[0]) regardless of how
+        # many music/sfx branches follow — so total runtime is never accidentally
+        # extended by a music track or shortened by a stray short sfx clip.
+        joined = "".join(audio_branches)
+        filter_parts.append(f"{joined}amix=inputs={len(audio_branches)}:duration=first:dropout_transition=2[aout]")
+        audio_map = "[aout]"
+    else:
+        audio_map = audio_branches[0]  # already bracketed
+
+    # Final loudness pass, after narration+music+sfx are already mixed — targets the
+    # same ~-14 LUFS YouTube itself normalizes to, so a video isn't further re-adjusted
+    # (and its dynamics squashed again) by the platform on top of whatever level we
+    # produced. audio_map is already bracket-form either way at this point.
     loud_in = audio_map if audio_map.startswith("[") else f"[{audio_map}]"
     audio_map = "[loud]"
     filter_parts.append(f"{loud_in}{LOUDNORM}[loud]")
