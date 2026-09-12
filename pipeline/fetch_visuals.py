@@ -24,7 +24,9 @@ Source order:
 - everything else: Pexels Video (real motion, needs PEXELS_API_KEY) -> Wikimedia Commons
   image -> Pexels Photo (needs PEXELS_API_KEY) -> gradient placeholder.
 """
+import math
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -243,33 +245,65 @@ def _detect_face_center(image_path: Path) -> list[float] | None:
         return None
 
 
-def _placeholder(out_path: Path, seed: int) -> None:
-    """Last-resort background when every real source misses for a beat — a radial
-    vignette + subtle grain, not a flat top-to-bottom gradient, so it reads as an
-    intentional stylized backdrop rather than an obviously-broken placeholder. Still
-    honest about being a fallback: no attempt to fake photographic content."""
+PLACEHOLDER_PALETTE = [
+    ((70, 45, 30), (18, 14, 20)),   # warm ember core -> near-black edge
+    ((30, 45, 55), (12, 14, 22)),   # cool teal core -> near-black edge
+    ((55, 30, 40), (16, 12, 18)),   # muted wine core -> near-black edge
+]
+
+
+def _placeholder_clip(out_path: Path, seed: int, duration: float = 4.0, fps: int = 30) -> None:
+    """Last-resort background when every real source misses for a beat — a genuinely
+    ANIMATED backdrop (the vignette's center drifts in a slow ellipse and a soft
+    diagonal light sweep drifts across the frame, on top of film grain), not a still
+    image that then just gets the same Ken Burns pan as everything else. Per the user's
+    explicit direction: a placeholder should read as a deliberate motion-graphics
+    choice, not a flat/frozen fallback. Rendered frame-by-frame in numpy (full creative
+    control over how the drift/sweep actually look) and piped straight into ffmpeg as
+    raw video, rather than trying to express organic motion through ffmpeg's own filter
+    expressions. Saved as an .mp4 so render.py treats it exactly like any other stock
+    video clip (its VIDEO_EXTS branch), no special-casing needed there. Still honest
+    about being a fallback: no attempt to fake photographic content."""
     w, h = 1080, 1920
-    palette = [
-        ((70, 45, 30), (18, 14, 20)),   # warm ember core -> near-black edge
-        ((30, 45, 55), (12, 14, 22)),   # cool teal core -> near-black edge
-        ((55, 30, 40), (16, 12, 18)),   # muted wine core -> near-black edge
-    ]
-    core, edge = palette[seed % len(palette)]
-
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-    cx, cy = w * 0.5, h * 0.38  # slightly above center, similar to a rule-of-thirds portrait
-    dist = np.sqrt(((xx - cx) / (w * 0.75)) ** 2 + ((yy - cy) / (h * 0.55)) ** 2)
-    t = np.clip(dist, 0, 1)[..., None]
-
+    core, edge = PLACEHOLDER_PALETTE[seed % len(PLACEHOLDER_PALETTE)]
     core_arr = np.array(core, dtype=np.float32)
     edge_arr = np.array(edge, dtype=np.float32)
-    rgb = core_arr * (1 - t) + edge_arr * t
-
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     rng = np.random.default_rng(seed)
-    grain = rng.normal(0, 4.5, size=(h, w, 1)).astype(np.float32)
-    rgb = np.clip(rgb + grain, 0, 255).astype(np.uint8)
+    n_frames = max(1, round(duration * fps))
 
-    Image.fromarray(rgb, mode="RGB").save(out_path, quality=90)
+    cmd = [
+        "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(fps),
+        "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", str(out_path),
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for i in range(n_frames):
+            phase = i / n_frames
+            # The vignette's own center drifts in a small ellipse over the clip's
+            # duration instead of sitting still — this alone is what turns a static
+            # radial gradient into something that reads as deliberately animated.
+            cx = w * (0.5 + 0.05 * math.sin(phase * 2 * math.pi))
+            cy = h * (0.38 + 0.035 * math.cos(phase * 2 * math.pi))
+            dist = np.sqrt(((xx - cx) / (w * 0.75)) ** 2 + ((yy - cy) / (h * 0.55)) ** 2)
+            t = np.clip(dist, 0, 1)[..., None]
+            rgb = core_arr * (1 - t) + edge_arr * t
+
+            # A soft diagonal light sweep oscillating back and forth — driven by sin(),
+            # not a modulo wrap, specifically so it's C0-continuous at the loop point:
+            # render.py plays this with -stream_loop -1 for beats longer than `duration`,
+            # so anything that isn't truly periodic would visibly jump every repeat.
+            diag = (xx / w + yy / h) / 2
+            sweep_pos = 0.5 + 0.65 * math.sin(phase * 2 * math.pi)
+            sweep = np.clip(1 - np.abs(diag - sweep_pos) * 6, 0, 1)[..., None] * 16
+            rgb = rgb + sweep
+
+            grain = rng.normal(0, 3.0, size=(h, w, 1)).astype(np.float32)
+            frame = np.clip(rgb + grain, 0, 255).astype(np.uint8)
+            proc.stdin.write(np.ascontiguousarray(frame).tobytes())
+    finally:
+        proc.stdin.close()
+        proc.wait()
 
 
 def _download(url: str, max_retries: int = 3) -> bytes | None:
@@ -318,8 +352,8 @@ def _fetch_person(query: str, out_base: Path, seed: int, entity_type: str) -> di
             if asset:
                 return asset
 
-    path = out_base.with_suffix(".jpg")
-    _placeholder(path, seed)
+    path = out_base.with_suffix(".mp4")
+    _placeholder_clip(path, seed)
     return {"path": path, "source": "placeholder", "entity_type": entity_type, "face": None}
 
 
@@ -348,8 +382,8 @@ def _fetch_generic(query: str, out_base: Path, seed: int, entity_type: str) -> d
         if asset:
             return asset
 
-    path = out_base.with_suffix(".jpg")
-    _placeholder(path, seed)
+    path = out_base.with_suffix(".mp4")
+    _placeholder_clip(path, seed)
     return {"path": path, "source": "placeholder", "entity_type": entity_type, "face": None}
 
 
