@@ -68,7 +68,6 @@ def build_timeline(
         },
         "style": {
             "caption_font": font["name"],
-            "caption_uppercase": bool(font.get("uppercase")),
             "voice": voice,
         },
     }

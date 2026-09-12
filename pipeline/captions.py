@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """Transcribe narration to word-level timestamps (faster-whisper, free, local) and render
-a styled .ass subtitle file: short on-screen chunks with the currently-spoken word
-highlighted (gold normally, a hotter orange for numbers/superlatives — a real semantic
-emphasis, not just "whichever word is playing") — the standard "TikTok/Reels caption"
-look, not a plain sentence-at-a-time subtitle track.
+a styled .ass subtitle file: plain, sentence-case, modestly-sized captions with a soft
+shadow and no box — the accessibility-caption look real streaming platforms use (Claude
+outputs/OPEN_ISSUES.md #67), not the "TikTok/Reels" bouncing-karaoke-word style this
+replaces. The user's own words, from early in this project: "THE SUBTITLES SHOULD BE
+LIKE NETFLIX."
 
-One of a few real, distinct display fonts is picked per video (see CAPTION_FONTS) rather
-than always the same face — pipeline/assets/fonts/ ships the actual font files (OFL
-licensed, see OFL.txt there) since the base ffmpeg image only has DejaVu, and asking for
-a font name that isn't installed just silently falls back to it. Chunk boundaries are
-picked by an estimated character budget per font, not a fixed word count — a fixed count
-overflows the frame on longer words/fonts, which is the "subtitles get out of screen" bug
-this replaces.
+One of a few real, distinct sans-serif reading faces is picked per video (see
+CAPTION_FONTS) — pipeline/assets/fonts/ ships the actual font files (OFL licensed, see
+OFL.txt there) since the base ffmpeg image only has DejaVu, and asking for a font name
+that isn't installed just silently falls back to it. Chunk boundaries are picked by an
+estimated character budget per font, not a fixed word count — a fixed count overflows
+the frame on longer words/fonts, which is the "subtitles get out of screen" bug this
+avoids.
 
 Usage: captions.py <input.mp3> <output.ass>
 """
 import random
-import re
 import sys
 from pathlib import Path
 
@@ -26,24 +26,27 @@ MODEL_SIZE = "small"
 VIDEO_W, VIDEO_H = 1080, 1920
 MARGIN_L = MARGIN_R = 60
 USABLE_WIDTH = VIDEO_W - MARGIN_L - MARGIN_R
-MAX_WORDS_PER_CHUNK = 6
-ACCENT_COLOR = "&H00D7FF&"  # ASS is BGR: this is gold (#FFD700)
-EMPHASIS_COLOR = "&H00285AFF&"  # a hotter orange (#FF5A28), for numbers/superlatives
+MAX_WORDS_PER_CHUNK = 10
 WHITE = "&HFFFFFF&"
 
 # avg_char_w is a conservative (slightly under-estimated, biased toward wrapping a
 # little early rather than risking overflow) px-per-character at this font's own size —
 # there's no real text-measurement available at this stage, just ffmpeg/libass output.
+# Both are real, statically-shipped OFL sans-serif reading faces (not display/headline
+# faces like the old Anton/Bebas Neue/Archivo Black, which stay in use for
+# motion_graphics.py's bold on-screen graphics — a genuinely different typographic role
+# from a plain running caption; see that module's own _FONT_FILES comment).
 CAPTION_FONTS = [
-    {"name": "Anton", "size": 80, "uppercase": True, "avg_char_w": 44},
-    {"name": "Bebas Neue", "size": 86, "uppercase": True, "avg_char_w": 38},
-    {"name": "Archivo Black", "size": 70, "uppercase": False, "avg_char_w": 46},
-    {"name": "DejaVu Sans", "size": 74, "bold": True, "uppercase": False, "avg_char_w": 45},
+    {"name": "Fira Sans Medium", "size": 58, "avg_char_w": 27},
+    {"name": "PT Sans", "size": 60, "avg_char_w": 28},
 ]
 
 
 def _ass_header(font: dict) -> str:
-    bold = 1  # every option here is a bold/black display weight
+    # BorderStyle=1 (outline+shadow, not a box) with a thin outline and a soft shadow —
+    # legible against any background without reading as a graphic element the way the
+    # old style's heavy 4px outline did. No Bold: the font file's own weight (Medium/
+    # Regular) is the whole point of picking real reading faces instead of display ones.
     return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {VIDEO_W}
@@ -53,25 +56,11 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,{font["name"]},{font["size"]},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,{bold},0,0,0,100,100,0,0,1,4,2,2,{MARGIN_L},{MARGIN_R},460,1
+Style: Caption,{font["name"]},{font["size"]},{WHITE},{WHITE},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1.4,2.6,2,{MARGIN_L},{MARGIN_R},460,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-
-
-# Numbers, or a short list of words that tend to carry the "surprising" weight of a
-# history-short sentence — a cheap, deterministic stand-in for real emphasis detection
-# that's good enough to make captions feel directed rather than uniformly flat.
-_EMPHASIS_RE = re.compile(
-    r"\d|^(first|only|secret|never|forgotten|lost|hidden|vanished|discovered|impossible|"
-    r"true|real|actual|no\W*one|nobody|everyone|everything|last|final)$",
-    re.IGNORECASE,
-)
-
-
-def _is_emphasis(word: str) -> bool:
-    return bool(_EMPHASIS_RE.search(word.strip(".,!?;:\"'‘’“”")))
 
 
 def _ts(seconds: float) -> str:
@@ -125,9 +114,9 @@ def build_caption_track(words: list[dict], font: dict) -> list[dict]:
     burned into an .ass file — the editor's caption track. Kept here (not re-derived
     elsewhere) so there's exactly one place chunk boundaries are decided.
 
-    Each entry's "words" list preserves the per-word timestamps the karaoke pop-in effect
-    needs — see build_ass_from_track(), which re-renders the exact same .ass from this
-    track (not from raw whisper output) so an edited caption actually changes the output."""
+    Each entry's "words" list preserves per-word timestamps (used for re-deriving exact
+    chunk start/end on a re-render, see build_ass_from_track()) even though the burned-in
+    style no longer animates word-by-word."""
     track = []
     for i, chunk in enumerate(_chunk_words(words, font)):
         track.append({
@@ -135,49 +124,25 @@ def build_caption_track(words: list[dict], font: dict) -> list[dict]:
             "text": " ".join(w["word"] for w in chunk),
             "start": round(chunk[0]["start"], 3),
             "end": round(chunk[-1]["end"], 3),
-            "emphasis": any(_is_emphasis(w["word"]) for w in chunk),
             "words": [{"word": w["word"], "start": round(w["start"], 3), "end": round(w["end"], 3)} for w in chunk],
         })
     return track
 
 
 def font_by_name(name: str) -> dict | None:
-    """Looks up a full font dict (size/uppercase/avg_char_w/...) from just the name saved
-    on Story.timeline["style"]["caption_font"] — used when re-rendering from a timeline,
+    """Looks up a full font dict (size/avg_char_w/...) from just the name saved on
+    Story.timeline["style"]["caption_font"] — used when re-rendering from a timeline,
     which only has the name, not the full CAPTION_FONTS entry."""
     return next((f for f in CAPTION_FONTS if f["name"] == name), None)
 
 
 def _dialogue_lines(chunk: list[dict], font: dict) -> list[str]:
-    """Builds the karaoke-style Dialogue lines (one per active word) for one on-screen
-    chunk — shared by build_ass() (raw whisper words) and build_ass_from_track() (a
-    timeline's stored caption track) so the two only ever produce identical output."""
-    lines = []
-    for i, active in enumerate(chunk):
-        parts = []
-        for j, w in enumerate(chunk):
-            text = _escape(w["word"])
-            if font.get("uppercase"):
-                text = text.upper()
-            if j == i:
-                color = EMPHASIS_COLOR if _is_emphasis(w["word"]) else ACCENT_COLOR
-                # Pop-in: the word starts slightly enlarged and springs down to 100%
-                # over 140ms. \t's timing is relative to this Dialogue line's own
-                # start, which is exactly this word's own start — so the pop lands
-                # right as it becomes active, not offset from it. Reset scale
-                # immediately after so it doesn't bleed into the words that follow
-                # in the same line.
-                parts.append(
-                    f"{{\\c{color}\\fscx130\\fscy130\\t(0,140,\\fscx100\\fscy100)}}{text}"
-                    f"{{\\c{WHITE}\\fscx100\\fscy100}}"
-                )
-            else:
-                parts.append(text)
-        line_text = " ".join(parts)
-        lines.append(
-            f"Dialogue: 0,{_ts(active['start'])},{_ts(active['end'])},Caption,,0,0,0,,{line_text}\n"
-        )
-    return lines
+    """One plain Dialogue line for the whole chunk — sentence case as transcribed, no
+    per-word color/scale animation. Shared by build_ass() (raw whisper words) and
+    build_ass_from_track() (a timeline's stored caption track) so the two only ever
+    produce identical output."""
+    text = " ".join(_escape(w["word"]) for w in chunk)
+    return [f"Dialogue: 0,{_ts(chunk[0]['start'])},{_ts(chunk[-1]['end'])},Caption,,0,0,0,,{text}\n"]
 
 
 def build_ass(words: list[dict], out_path: str, font: dict | None = None) -> None:
@@ -189,7 +154,7 @@ def build_ass(words: list[dict], out_path: str, font: dict | None = None) -> Non
 
 
 def build_ass_from_track(caption_track: list[dict], font: dict, out_path: str) -> None:
-    """Re-renders the exact same karaoke .ass as build_ass(), but sourced from an editable
+    """Re-renders the exact same .ass as build_ass(), but sourced from an editable
     timeline's caption track (build_caption_track's output) instead of raw whisper words —
     what render_timeline.py uses so a human's edit to a caption's text/timing actually
     changes the burned-in output on re-render. Falls back to a single-word "chunk" for any

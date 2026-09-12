@@ -37,7 +37,7 @@ def test_build_ass_from_track_matches_build_ass_for_same_words(tmp_path):
 def test_build_ass_from_track_falls_back_without_word_timestamps(tmp_path):
     """A caption entry a human editor added (or one from before "words" existed) has no
     per-word data — must still render as a single dialogue line, not crash."""
-    font = captions.font_by_name("Archivo Black")  # uppercase: False, so casing isn't in play
+    font = captions.font_by_name("Fira Sans Medium")
     track = [{"id": "cap_00", "text": "Hand edited caption", "start": 0.0, "end": 1.5, "emphasis": False}]
     out_path = tmp_path / "fallback.ass"
     captions.build_ass_from_track(track, font, str(out_path))

@@ -1889,3 +1889,69 @@ assumed**:
 not a live bug (nothing in the running pipeline constructs `beats_final` through
 `film_plan.py` yet, per Milestone 1's own status note), but a real gap the eventual
 FilmPlan-schema wiring (a later milestone) will need to close.
+
+---
+
+## 67. Netflix-style captions (Milestone 5, narrower scope) — real default, not a mockup
+
+**Status: VERIFIED — real end-to-end round trip (real TTS, real Whisper transcription, real ffmpeg render), real frames inspected**
+
+The user's own words, from early in this session: "THE SUBTITLES SHOULD BE LIKE
+NETFLIX." Until now that only existed as a mockup (`Claude outputs/caption_dailies.html`,
+published as an Artifact) — every real generated video still burned in the original
+per-word karaoke-pop caption style. This closes that gap for real.
+
+**What changed** (`pipeline/captions.py`, fully rewritten): the old style — each on-
+screen chunk rendered as N `Dialogue:` lines (one per word), the currently-spoken word
+enlarged 30% and recolored gold/orange via `\c`/`\t`/`\fscx` override tags, forced
+uppercase on 2 of 4 fonts — is gone. The new default: one plain `Dialogue:` line per
+chunk, sentence case exactly as transcribed (real Whisper output already capitalizes
+correctly — verified, not assumed), a single white color, `BorderStyle=1` with a thin
+1.4px outline + 2.6px shadow (soft shadow, no box, no heavy 4px outline), no forced
+bold. `CAPTION_FONTS` itself changed from 4 bold/condensed *display* faces (Anton,
+Bebas Neue, Archivo Black, DejaVu Sans Bold) — right for a karaoke pop, wrong for a
+plain reading caption — to 2 real, statically-shipped OFL sans-serif *reading* faces:
+Fira Sans Medium and PT Sans. (Source Sans 3, the mockup's actual choice, turned out to
+now ship from Google Fonts only as a variable font; a real test in this session showed
+fontconfig resolving its "default" named instance to ExtraLight — visibly too thin for
+a caption — so Fira Sans Medium was used instead: a genuine, close substitute, not a
+silent swap.)
+
+**A real, deliberate typographic-role split, not an oversight**: `motion_graphics.py`'s
+own bold-display fonts (Anton/Bebas Neue/Archivo Black, used for year-callout graphics
+and keyword cards) were deliberately NOT updated to match the new caption fonts. A
+large on-screen graphic and a small running caption are different typographic roles —
+matching them 1:1 (the original reasoning behind that font-matching code, `#33`) would
+put a body-text-weight face where a bold display face belongs. `font_path_for()`'s
+existing "fall back to Anton if the caption font isn't in `_FONT_FILES`" behavior
+already produces exactly this outcome with zero code change — the comment there now
+says so explicitly instead of leaving it looking like an accident.
+
+**Dead code actually removed, not left as unused cruft**: `_EMPHASIS_RE`/`_is_emphasis()`
+(drove the old per-word gold/orange highlight — confirmed via grep that nothing else in
+the codebase reads the `"emphasis"` field `build_caption_track()` used to attach, so it's
+gone from that output too) and `Story.timeline`'s `caption_uppercase` field (also
+confirmed unread anywhere, including the frontend).
+
+**Verified, in order**: `tests/test_captions.py` (new, 7 tests — exactly one Dialogue
+line per chunk, no `\c`/`\t(`/`\fscx` tags survive, sentence case preserved, thin
+non-bold outline in the actual `.ass` style line, only the 2 new fonts are ever picked);
+existing `tests/test_beats.py`/`test_render_timeline.py` font-name references updated
+(the old `"Archivo Black"` caption lookup doesn't exist as a caption font anymore —
+still works fine for `motion_graphics.py`, per the role split above); full suite:
+199 passed, 1 skipped. Then two real rendering checks: (1) synthetic word timestamps
+through `build_ass()` → real ffmpeg `subtitles=` burn-in → frame extracted and visually
+inspected for both fonts — clean, legible, comfortably inside the frame margins, no
+overflow; (2) the full real pipeline slice — real `edge-tts` narration → real
+`faster-whisper` transcription → `build_ass()` → real ffmpeg render → frame inspected —
+confirming real transcribed text (not hand-typed test data) renders correctly.
+
+**Known, honest limitation, not fixed here**: this is a narrower slice of the
+architecture doc's Milestone 5 (`FILM_PLAN_ARCHITECTURE.md`), which also called for
+distinct typography *roles* — `quote`, `date_card`, `location_card`/`lower_third` — as
+occasional, sparse motion-graphic overlays (see the mockup's other 7 phone-frame
+treatments), and for narration captions to be off by default rather than restyled.
+Neither is built: every video still gets a continuous running caption on every beat
+(now Netflix-styled, not removed), and the only typography variety beyond the running
+caption is the pre-existing year-callout graphic and (for a `needs_keyword_card` beat)
+the keyword card — both unchanged, still in the old bold Anton/Bebas/Archivo treatment.

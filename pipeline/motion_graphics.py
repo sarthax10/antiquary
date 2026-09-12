@@ -42,11 +42,15 @@ FONT_PATH = "/usr/share/fonts/truetype/antiquary/Anton-Regular.ttf"
 ACCENT_COLOR = "0xE0A94D"  # the app's own warm gold accent (tungsten), for visual continuity
 
 # Maps a captions.py font dict's "name" (see captions.CAPTION_FONTS) to its actual font
-# file, so the timeline-marker graphic can be set in the SAME face as the video's own
-# captions instead of always hardcoding Anton regardless of what was picked for this
-# video — a real type-system mismatch on 3 of 4 generated videos, found in the 2026-09-12
-# team audit (OPEN_ISSUES.md #33). Kept here (not in captions.py) since this module owns
-# FONT_PATH and is the only thing that needs the resolved file path, not the font dict.
+# file, originally so the timeline-marker graphic could be set in the SAME face as the
+# video's own captions (OPEN_ISSUES.md #33). As of #67, captions.py's fonts are plain
+# reading faces (Fira Sans Medium/PT Sans) — deliberately NOT listed here: a large bold
+# on-screen graphic (a year callout, a keyword card) is a different typographic role
+# from a small running caption, and matching them 1:1 would put a body-text-weight face
+# where a display face belongs. This module keeps its own bold-display font set,
+# falling back to it below whenever the caption font isn't one of these — which, since
+# #67, is every real video, not the "unmatched future font" edge case this fallback was
+# originally written for.
 _FONT_FILES = {
     "Anton": FONT_PATH,
     "Bebas Neue": "/usr/share/fonts/truetype/antiquary/BebasNeue-Regular.ttf",
@@ -58,7 +62,8 @@ _FONT_FILES = {
 def font_path_for(font: dict | None) -> str:
     """Resolves a captions.py-style font dict to its font file, falling back to this
     module's own default (Anton) if `font` is None or names a face not in `_FONT_FILES`
-    (defensive against a future caption font being added here without a matching entry)."""
+    — see this dict's own comment for why every real caption font falls into that case
+    as of #67, by design."""
     if font:
         path = _FONT_FILES.get(font.get("name"))
         if path:
