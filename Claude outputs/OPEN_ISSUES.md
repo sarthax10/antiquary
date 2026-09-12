@@ -565,6 +565,60 @@ the stronger rule, not the weaker one), just a papercut worth fixing: either upd
 
 ---
 
+## 54. Professional Video Quality Roadmap — Tier 1/2 implementation (2026-09-12)
+
+**Status: VERIFIED — 5 items shipped and verified against the real stack**
+
+Per `Claude outputs/PROFESSIONAL_QUALITY_ROADMAP.md`'s prioritized roadmap (research done
+first, explicitly not implemented until the user confirmed "continue"):
+
+- **Tier 1 #1 — per-clip color correction before the shared grade.** `render.py` now runs
+  ffmpeg's `normalize` filter (`independence=0`, linked-channel — corrective, not a hue
+  shift; `strength=0.6`, partial not full stretch; `smoothing=20` for real video clips) on
+  each clip before the single shared creative grade, addressing the biggest identified
+  cause of clips from three unrelated origins (Wikidata/Commons/Pexels) not reading as one
+  production. **A real, serious bug found and fixed during verification**: wiring
+  `normalize` in *after* the existing `scale=8000:-1` pre-scale (used ahead of `zoompan`)
+  made a single ~2s clip balloon to 6.5GB+ RSS and get SIGKILLed by the OOM killer — found
+  by watching `docker stats`/`/proc/<pid>/status` during a render that mysteriously died,
+  not by reading the filter's docs. Isolated, reproduced, and fixed by moving
+  `normalize` to run *before* `scale=8000:-1` (on the small source image, not the
+  ~8000x14222px upscaled intermediate) — confirmed memory-flat (~350MB, stable) at both
+  `smoothing=0` and the intended `smoothing=20` once reordered.
+- **Tier 2 #8 — final loudness normalization.** Added `loudnorm=I=-14:LRA=11:TP=-1.5`
+  (matches YouTube's own normalization target) as the last step of the audio chain, after
+  narration+music are mixed. Verified: a real rendered output measured at **-13.7 LUFS
+  integrated** via a fresh `ffmpeg ... loudnorm ... print_format=summary` pass — on target.
+- **Tier 2 #7 — motion-graphics font now matches the video's own captions.** `render.py`
+  accepts an optional `font` parameter (a `captions.py`-style dict) and threads its
+  resolved file path into `motion_graphics.timeline_overlay_filter()` (new
+  `motion_graphics.font_path_for()` helper), fixing audit #33 (previously always hardcoded
+  Anton regardless of the caption font picked for that video). Wired through both real
+  call sites: `run_pipeline.py` (auto-generation) and `render_timeline.py` (editor
+  re-render). Verified visually — a real render with `font="Bebas Neue"` shows the year
+  callout in Bebas Neue's distinctive condensed glyphs, not Anton.
+- **Tier 2 #5 — transitions require actual subject overlap, not just matching
+  `entity_type`.** New `_same_subject()` compares a bag-of-significant-words from each
+  beat's own `visual_query`; the continuity crossfade now requires *both* matching
+  `entity_type` *and* real word overlap, fixing audit #34 (a "person" beat about Caesar
+  followed by a "person" beat about Brutus previously got treated as a continuation).
+  5 new unit tests (`tests/test_render.py`) plus a real render confirming a genuine
+  Caesar→Brutus subject change now produces a hard cut (`XFADE_CUT`/`"fade"`), not a
+  crossfade.
+- **Tier 1 #4 — beat-duration floor.** New `run_pipeline._merge_short_beats()` (called
+  right after TTS synthesis, before narration concatenation) merges any beat whose real
+  synthesized audio comes out under 0.9s into an adjacent beat (forward into the next
+  beat where one exists, otherwise backward into the last kept one), concatenating audio
+  (`tts.concat_audio` — lossless, same-voice/codec) and text, keeping the *surviving*
+  beat's own visual asset. Fixes audit #38 (a punchy one-word beat could previously
+  produce a sub-second "glitch" cut). Safe by construction: `captions.py` transcribes the
+  final concatenated narration directly (word-level, not beat-boundary-based), so it's
+  indifferent to how many beats the audio was assembled from. 5 new unit tests
+  (`tests/test_run_pipeline.py`) cover forward merge, backward merge, cascading
+  double-merge, no-merge, and single-beat-alone cases.
+
+Full test suite: 75/75 pass.
+
 # Full panel audit — 2026-09-12
 
 Per explicit request: a full audit of the whole application by the entire team, in

@@ -72,7 +72,7 @@ def render_from_timeline(timeline: dict, out_path: str) -> None:
         ass_path = tmp_dir / "captions.ass"
         captions.build_ass_from_track(tracks.get("captions") or [], font, str(ass_path))
 
-        render.render(str(narration_path), str(ass_path), out_path, beats_final)
+        render.render(str(narration_path), str(ass_path), out_path, beats_final, font=font)
 
 
 def render_story(story_id: str) -> str:

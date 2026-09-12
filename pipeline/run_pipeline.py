@@ -40,6 +40,77 @@ from app.generation import job_manager  # noqa: E402
 
 BASE_DIR = REPO_ROOT
 
+# A beat whose real synthesized narration comes out shorter than this reads as a glitch
+# cut, not a deliberate quick one — nothing previously merged it into a neighbor (see
+# Claude outputs/OPEN_ISSUES.md audit #38 / PROFESSIONAL_QUALITY_ROADMAP.md §7 Tier 1 #4).
+MIN_BEAT_DURATION = 0.9
+
+
+def _merge_short_beats(
+    beats: list[dict], assets: list[dict], beat_audio: list[dict]
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Merges any beat whose real synthesized-audio duration comes out under
+    MIN_BEAT_DURATION into an adjacent beat (forward into the next beat where one exists,
+    otherwise backward into the last kept beat) — so a single short exclamatory sentence
+    grouped as its own beat can't produce a sub-second visual clip. Concatenates the two
+    beats' narration audio (tts.concat_audio — same-voice/codec clips, so this is a
+    lossless demuxer-level join, not a re-encode) and their text (in narration order);
+    keeps the *surviving* beat's own visual asset rather than trying to pick a "better"
+    one between two, since a stock visual can't represent two merged beats' content any
+    more precisely than either alone. Safe to do before anything downstream sees these
+    lists: captions.py transcribes the final concatenated narration.mp3 directly (word-
+    level, not beat-boundary-based), so it's indifferent to how many beats the audio was
+    assembled from — only render.py's/timeline.py's *visual* cut points depend on this."""
+    if len(beats) <= 1:
+        return beats, assets, beat_audio
+    merged_beats: list[dict] = []
+    merged_assets: list[dict] = []
+    merged_audio: list[dict] = []
+    i = 0
+    while i < len(beats):
+        duration = beat_audio[i]["duration"]
+        if duration < MIN_BEAT_DURATION and len(beats) > 1:
+            if i + 1 < len(beats):
+                # Merge forward: fold this beat's audio/text into the NEXT beat in place,
+                # then let the loop process that (now-combined) next beat normally —
+                # keeps the next beat's own asset, matching "surviving beat keeps its
+                # visual" above.
+                combined_path = str(Path(beat_audio[i]["path"]).with_name(f"merged_{i:02d}.mp3"))
+                tts.concat_audio([beat_audio[i]["path"], beat_audio[i + 1]["path"]], combined_path)
+                merged_text = f"{beats[i]['text']} {beats[i + 1]['text']}"
+                beats[i + 1] = {**beats[i + 1], "text": merged_text}
+                beat_audio[i + 1] = {
+                    **beat_audio[i + 1],
+                    "path": combined_path,
+                    "duration": duration + beat_audio[i + 1]["duration"],
+                    "text": merged_text,
+                }
+                i += 1
+                continue
+            if merged_beats:
+                # Last beat, too short, nothing after it to merge forward into — fold it
+                # backward into the last beat already kept instead.
+                prev_beat, prev_audio = merged_beats[-1], merged_audio[-1]
+                combined_path = str(Path(prev_audio["path"]).with_name(f"merged_{i:02d}.mp3"))
+                tts.concat_audio([prev_audio["path"], beat_audio[i]["path"]], combined_path)
+                merged_text = f"{prev_beat['text']} {beats[i]['text']}"
+                merged_beats[-1] = {**prev_beat, "text": merged_text}
+                merged_audio[-1] = {
+                    **prev_audio,
+                    "path": combined_path,
+                    "duration": prev_audio["duration"] + duration,
+                    "text": merged_text,
+                }
+                i += 1
+                continue
+            # Only one beat total and it's short — nothing to merge into; keep it as is
+            # rather than producing an empty beat list.
+        merged_beats.append(beats[i])
+        merged_assets.append(assets[i])
+        merged_audio.append(beat_audio[i])
+        i += 1
+    return merged_beats, merged_assets, merged_audio
+
 
 def _cap_parallel(beats: list[dict], assets: list[dict], beat_audio: list[dict], max_clips: int):
     """Caps all three beat-indexed lists together, the same way render.py's own
@@ -75,10 +146,13 @@ def run(topic: str) -> str:
         voice = tts.pick_voice()
         audio_dir = work_dir / "audio"
         beat_audio = asyncio.run(tts.synthesize_beats(script["beats"], audio_dir, voice=voice))
+
+        merged_beats, assets, beat_audio = _merge_short_beats(script["beats"], assets, beat_audio)
+
         narration_path = work_dir / "narration.mp3"
         tts.concat_audio([b["path"] for b in beat_audio], str(narration_path))
 
-        beats, assets, beat_audio = _cap_parallel(script["beats"], assets, beat_audio, render.MAX_CLIPS)
+        beats, assets, beat_audio = _cap_parallel(merged_beats, assets, beat_audio, render.MAX_CLIPS)
 
         job_manager.set_stage("generating_captions")
         font = captions.pick_font()
@@ -98,7 +172,7 @@ def run(topic: str) -> str:
             }
             for asset, audio in zip(assets, beat_audio)
         ]
-        render.render(str(narration_path), str(ass_path), str(video_path), beats_final)
+        render.render(str(narration_path), str(ass_path), str(video_path), beats_final, font=font)
 
         story_timeline = timeline_module.build_timeline(
             beats=beats,

@@ -41,6 +41,30 @@ _BARE_YEAR_RE = re.compile(r"\b(1[0-9]{3}|20[0-2][0-9])\b")
 FONT_PATH = "/usr/share/fonts/truetype/antiquary/Anton-Regular.ttf"
 ACCENT_COLOR = "0xE0A94D"  # the app's own warm gold accent (tungsten), for visual continuity
 
+# Maps a captions.py font dict's "name" (see captions.CAPTION_FONTS) to its actual font
+# file, so the timeline-marker graphic can be set in the SAME face as the video's own
+# captions instead of always hardcoding Anton regardless of what was picked for this
+# video — a real type-system mismatch on 3 of 4 generated videos, found in the 2026-09-12
+# team audit (OPEN_ISSUES.md #33). Kept here (not in captions.py) since this module owns
+# FONT_PATH and is the only thing that needs the resolved file path, not the font dict.
+_FONT_FILES = {
+    "Anton": FONT_PATH,
+    "Bebas Neue": "/usr/share/fonts/truetype/antiquary/BebasNeue-Regular.ttf",
+    "Archivo Black": "/usr/share/fonts/truetype/antiquary/ArchivoBlack-Regular.ttf",
+    "DejaVu Sans": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+}
+
+
+def font_path_for(font: dict | None) -> str:
+    """Resolves a captions.py-style font dict to its font file, falling back to this
+    module's own default (Anton) if `font` is None or names a face not in `_FONT_FILES`
+    (defensive against a future caption font being added here without a matching entry)."""
+    if font:
+        path = _FONT_FILES.get(font.get("name"))
+        if path:
+            return path
+    return FONT_PATH
+
 TEXT_X, TEXT_Y, FONT_SIZE = 96, 220, 84
 BOX_BORDER = 20  # padding between the text glyph and the tight-fitting box edge
 
@@ -160,7 +184,9 @@ def _underline_width_segments(
     return segments
 
 
-def timeline_overlay_filter(label: str, beat_duration: float, in_label: str, out_label: str) -> str | None:
+def timeline_overlay_filter(
+    label: str, beat_duration: float, in_label: str, out_label: str, font_path: str | None = None
+) -> str | None:
     """A drawtext+drawbox filter chain fragment (`[in_label] ... [out_label]`, both
     already-scaled 1080x1920 video streams) animating a year callout with a coordinated
     ease-in/hold/ease-out — entrance and exit mirror each other rather than the graphic
@@ -170,6 +196,7 @@ def timeline_overlay_filter(label: str, beat_duration: float, in_label: str, out
     if show_until < MIN_SHOW:
         return None
     exit_start = show_until - EXIT_DURATION
+    resolved_font_path = font_path or FONT_PATH
 
     escaped = label.replace("'", "").replace(":", "").replace("\\", "")
 
@@ -216,7 +243,7 @@ def timeline_overlay_filter(label: str, beat_duration: float, in_label: str, out
     return (
         f"[{in_label}]"
         f"{underline_filters},"
-        f"drawtext=text='{escaped}':fontfile={FONT_PATH}:fontsize={FONT_SIZE}:fontcolor=white:"
+        f"drawtext=text='{escaped}':fontfile={resolved_font_path}:fontsize={FONT_SIZE}:fontcolor=white:"
         f"x={TEXT_X}:y='{text_y}':box=1:boxcolor=black@0.45:boxborderw={BOX_BORDER}:"
         f"alpha='{text_alpha}':enable='{enable}'"
         f"[{out_label}]"

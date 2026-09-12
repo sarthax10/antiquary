@@ -26,6 +26,7 @@ Requires ffmpeg on PATH.
 """
 import json
 import random
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -49,6 +50,49 @@ VIDEO_EXTS = (".mp4", ".mov", ".webm", ".m4v")
 
 MUSIC_DIR = Path(__file__).resolve().parent / "assets" / "music"
 MUSIC_VOLUME = 0.12
+
+# Per-clip auto black/white-point correction, applied before the single shared creative
+# grade below — "correction before grading" (see Claude outputs/PROFESSIONAL_QUALITY_
+# ROADMAP.md §1.4/§7 Tier 1 #1). Our clips come from three unrelated origins (Wikidata
+# portraits, Commons scans, Pexels stock) with no shared color science, and today only
+# the shared grade touches them — this is the single biggest cause of clips in one video
+# visibly not belonging to the same "production." independence=0 links R/G/B scaling
+# (stretches contrast/exposure range without shifting hue/white balance — a corrective
+# move, not a creative one); strength=0.6 is deliberately partial, not a full stretch,
+# so a source image with genuine intentional contrast isn't flattened; smoothing damps
+# frame-to-frame flicker on real video clips (irrelevant for a still, harmless either way).
+CLIP_NORMALIZE = "normalize=independence=0:strength=0.6:smoothing=20"
+
+# Target integrated loudness for the final mix — matches YouTube's own normalization
+# target (see PROFESSIONAL_QUALITY_ROADMAP.md §1.5/§7 Tier 2 #8), so a video isn't
+# perceptibly re-adjusted (and its dynamics further squashed) by the platform on top of
+# whatever level render.py already produced. TP (true peak ceiling) and LRA (loudness
+# range) use ffmpeg's own loudnorm defaults tuned slightly for narration+music content.
+LOUDNORM = "loudnorm=I=-14:LRA=11:TP=-1.5"
+
+_SUBJECT_STOPWORDS = frozenset({
+    "a", "an", "the", "of", "in", "at", "on", "and", "to", "with", "his", "her", "their",
+    "its", "for", "from", "by", "as", "is", "was", "were", "are", "this", "that",
+})
+
+
+def _subject_key(beat: dict) -> set[str]:
+    """A rough bag-of-significant-words from a beat's own visual_query — used to tell
+    whether two consecutive beats that happen to share an entity_type are actually about
+    the *same* subject (a person beat about Caesar, followed by another about Caesar) or
+    just coincidentally the same type (Caesar, then Brutus — both "person", but a real
+    subject change that deserves a hard cut, not a continuity crossfade). See
+    OPEN_ISSUES.md audit #34 — entity_type alone was never a claim about sameness."""
+    words = re.findall(r"[a-z']+", (beat.get("visual_query") or "").lower())
+    return {w for w in words if w not in _SUBJECT_STOPWORDS and len(w) > 2}
+
+
+def _same_subject(a: dict, b: dict) -> bool:
+    ka, kb = _subject_key(a), _subject_key(b)
+    if not ka or not kb:
+        return False
+    overlap = ka & kb
+    return bool(overlap) and len(overlap) / min(len(ka), len(kb)) >= 0.4
 
 
 def get_audio_duration(audio_path: str) -> float:
@@ -76,7 +120,11 @@ def _transition_style(a: dict, b: dict, index: int) -> tuple[float, str]:
     a to beat b (index is this transition's position, for deterministic direction
     alternation). Three cases, chosen the way a real edit would use them — see
     `ffmpeg -h filter=xfade` for the confirmed transition name list on this build:
-      - same subject continuing (same entity_type): a real crossfade duration, with a
+      - same subject continuing (same entity_type *and* a real overlap between the two
+        beats' own visual_query words, via _same_subject() — matching entity_type alone
+        isn't a claim about sameness: a "person" beat about Caesar followed by a "person"
+        beat about Brutus is a real subject change, not a continuation, even though both
+        are "person"; see OPEN_ISSUES.md audit #34): a real crossfade duration, with a
         gentle directional "smooth" wipe rather than a plain dissolve — reads as connected
         motion. Direction alternates by transition index so it isn't the same slide twice
         running.
@@ -90,7 +138,7 @@ def _transition_style(a: dict, b: dict, index: int) -> tuple[float, str]:
       - every other subject change: unchanged from before — a near-instant hard cut.
     """
     at, bt = a.get("entity_type"), b.get("entity_type")
-    if at and at == bt:
+    if at and at == bt and _same_subject(a, b):
         return XFADE_SMOOTH, ("smoothleft" if index % 2 == 0 else "smoothright")
     if bt == "person" and at in _PERSON_ACCENT_TYPES:
         return XFADE_SMOOTH, "circleopen"
@@ -153,8 +201,13 @@ def music_available() -> bool:
     return bool(_music_tracks())
 
 
-def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict]) -> None:
+def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict], font: dict | None = None) -> None:
+    """`font` is an optional captions.py-style font dict (see captions.CAPTION_FONTS) —
+    when given, the timeline-marker motion graphic is set in the same face as this
+    video's own captions instead of always defaulting to Anton (see
+    motion_graphics.font_path_for() and OPEN_ISSUES.md audit #33)."""
     total_duration = get_audio_duration(audio_path)
+    font_path = motion_graphics.font_path_for(font)
     beats = _cap_beats(beats, MAX_CLIPS)
     n = len(beats)
 
@@ -191,7 +244,8 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict]) -> 
         path = beat["path"]
         if path.lower().endswith(VIDEO_EXTS):
             filter_parts.append(
-                f"[{i}:v:0]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
+                f"[{i}:v:0]{CLIP_NORMALIZE},"
+                f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
                 f"crop={WIDTH}:{HEIGHT},setpts=PTS-STARTPTS,fps={FPS},format=yuv420p[v{i}]"
             )
         else:
@@ -199,8 +253,17 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict]) -> 
             px, py = (face[0], face[1]) if face else (0.5, 0.5)
             frames = max(1, round(requested[i] * FPS))
             z, x, y = _zoompan_expr(px, py, zoom_in=(i % 2 == 0), index=i, frames=frames)
+            # CLIP_NORMALIZE runs BEFORE scale=8000 (not after, where it was first
+            # wired), and that ordering is load-bearing, not cosmetic: applying it on the
+            # post-upscale ~8000x14222px intermediate frame (the source's native
+            # resolution upscaled 8000px wide before zoompan crops back down) made a
+            # single ~2s clip balloon to 6.5GB+ RSS and effectively hang — confirmed by
+            # isolated testing (memory stayed flat applying it pre-upscale on the small
+            # source image instead, identical visual result). Not documented behavior
+            # anyone would guess; found by watching real memory usage during a render
+            # that was mysteriously getting SIGKILLed, not by reading the filter docs.
             filter_parts.append(
-                f"[{i}:v:0]scale=8000:-1,"
+                f"[{i}:v:0]{CLIP_NORMALIZE},scale=8000:-1,"
                 f"zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS},"
                 f"format=yuv420p[v{i}]"
             )
@@ -211,7 +274,7 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict]) -> 
         year_label = motion_graphics.extract_year_label(beat.get("text", ""))
         if year_label:
             overlay = motion_graphics.timeline_overlay_filter(
-                year_label, requested[i], f"v{i}", f"v{i}o"
+                year_label, requested[i], f"v{i}", f"v{i}o", font_path=font_path
             )
             if overlay:
                 filter_parts.append(overlay)
@@ -264,6 +327,17 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict]) -> 
         )
         filter_parts.append(f"[{audio_input_index}:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]")
         audio_map = "[aout]"  # now a filter_complex output label, needs brackets
+
+    # Final loudness pass, after narration+music are already mixed — targets the same
+    # ~-14 LUFS YouTube itself normalizes to, so a video isn't further re-adjusted (and
+    # its dynamics squashed again) by the platform on top of whatever level we produced.
+    # audio_map is either a bare stream specifier ("2:a", no music) or an existing
+    # filter_complex output label ("[aout]", music mixed in) — normalize to bracket
+    # syntax either way, since a bare specifier used as a filter's own input inside
+    # filter_complex still needs brackets (only -map accepts the bare form).
+    loud_in = audio_map if audio_map.startswith("[") else f"[{audio_map}]"
+    audio_map = "[loud]"
+    filter_parts.append(f"{loud_in}{LOUDNORM}[loud]")
 
     filter_complex = ";".join(filter_parts)
 
