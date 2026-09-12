@@ -1161,3 +1161,70 @@ are cheap, well-understood fixes worth doing regardless of live-verification sin
 mechanism is unambiguous from the code; #53 (route-level test gap) is worth closing
 before trusting any of the ownership/security claims elsewhere in this file as
 permanently true, since nothing currently guards against a regression at that layer.
+
+# Real production incidents — reported by the user, 2026-09-12
+
+## 55. edge-tts DNS/network failure kills the whole generation, nothing saved, no retry
+
+**Status: OPEN — real occurrence in prod, root cause understood, not yet mitigated**
+
+User-reported, with the exact stack trace from the failed-generation card in prod:
+
+```
+File ".../aiohttp/connector.py", line 657, in connect
+    proto = await self._create_connection(req, traces, timeout)
+  File ".../aiohttp/connector.py", line 1242, in _create_connection
+    _, proto = await self._create_direct_connection(req, traces, timeout)
+  File ".../aiohttp/connector.py", line 1577, in _create_direct_connection
+    raise ClientConnectorDNSError(req.connection_key, exc) from exc
+aiohttp.client_exceptions.ClientConnectorDNSError: Cannot connect to host
+speech.platform.bing.com:443 ssl:<SSLContext ...> [Temporary failure in name resolution]
+```
+
+`pipeline/tts.py`'s `synthesize()` (`edge_tts.Communicate(...).save(out_path)`) talks to
+Microsoft's `speech.platform.bing.com` over the network for every single beat, with **no
+retry/backoff anywhere** in the pipeline for this or any other external network call
+(Wikidata/Commons/Pexels fetches in `fetch_visuals.py` have the same gap). A transient
+DNS blip on the server — which self-resolves, as literally nothing else about this
+request was wrong — is currently indistinguishable from a permanent failure: it takes
+down the whole generation job immediately, the user sees a raw traceback in the "last
+generation failed" card, and (confirmed in the same screenshot) nothing is saved, so a
+multi-minute generation has to be redone from scratch for a few seconds of bad luck on
+one DNS lookup.
+
+**Fix direction**: wrap the per-beat `synthesize()` call (and ideally the Wikidata/
+Commons/Pexels HTTP calls in `fetch_visuals.py`, same class of problem) in a small
+retry-with-backoff (e.g. 3 attempts, short exponential delay) that only retries on the
+transient network exception classes (DNS/connection/timeout — not on a real 4xx from the
+service, which retrying won't fix). Separately, surfacing "network hiccup, retrying..."
+instead of an immediate raw traceback would match this project's honest-UI precedent
+(no fake progress, but also no scarier-than-necessary failure for something
+self-healing). Not yet implemented — this is a real, reproducible gap, not a hypothesis.
+
+## 56. Placeholder fallback still reads as "just a gradient, no real video" in production — escalates #16/#17
+
+**Status: OPEN — user-confirmed live occurrence; direction confirmed by the user: replace with custom animations/illustrations, not just tune the existing animated gradient**
+
+User-reported: the second video generated in the same prod session rendered with **no
+real sourced visual for at least one beat** — what appeared on screen was the animated
+placeholder backdrop (#16 — a drifting radial-vignette gradient with a light sweep, not
+a static image, but still just a gradient) rather than any actual photo/illustration.
+The user's own framing, verbatim: *"These blank backgrounds should be replaced with
+custom animations and custom illustrations."*
+
+This isn't a new bug — #16 already documents the animated-gradient placeholder as
+"MITIGATED, not eliminated" (#12) and #17 already scopes the honest ceiling ("full-frame
+2D motion graphics... applied first to the placeholder-background case") as the real,
+larger fix. What this report adds: **direct confirmation from an actual production
+occurrence** that the current animated gradient still reads as "blank"/"no video" to a
+real viewer, not just as a theoretical gap, and **explicit user direction on where #17
+should go next** — actual illustrated/animated content per placeholder occurrence
+(e.g. a small library of pre-built or programmatically-generated 2D scene graphics
+keyed by the beat's `entity_type`/topic, not only the current single drift+sweep
+treatment), rather than further tuning the gradient itself. Promote #17 from "scoped, not
+started" to the next real priority once the music/SFX work in flight is done.
+
+Also worth checking (not yet done): why this specific beat fell through the entire
+Wikidata → Commons → Pexels waterfall in `fetch_visuals.py` to begin with — #12's
+"descriptor-strip-list gaps" root cause may need another look at whatever query this
+beat generated, alongside building the better fallback itself.

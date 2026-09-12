@@ -55,3 +55,55 @@ def test_transition_style_person_to_place_is_an_accent_transition():
     duration, name = render._transition_style(a, b, 0)
     assert duration == render.XFADE_SMOOTH
     assert name == "radial"
+
+
+# --- Mood classification (Professional Quality Roadmap Tier 3 #11) ------------------
+# Whole-word matching, not substring: see render._classify_mood's own docstring for why
+# ("war" must not fire on "warm"/"warrior"). Real word lists are exercised here, not
+# mocked out, since a wrong word list is exactly the kind of bug these tests should
+# actually catch.
+
+def test_classify_mood_tense_from_real_narration_words():
+    beats = [{"text": "The general was captured and executed after the brutal siege."}]
+    assert render._classify_mood(beats) == "tense"
+
+
+def test_classify_mood_somber_from_real_narration_words():
+    beats = [{"text": "He died alone, mourned by no one, his name soon forgotten."}]
+    assert render._classify_mood(beats) == "somber"
+
+
+def test_classify_mood_uplifting_from_real_narration_words():
+    beats = [{"text": "Against all odds, the team celebrated their hard-won victory."}]
+    assert render._classify_mood(beats) == "uplifting"
+
+
+def test_classify_mood_defaults_to_documentary_when_no_signal():
+    beats = [{"text": "The ancient trade route connected three distant cities."}]
+    assert render._classify_mood(beats) == "documentary"
+
+
+def test_classify_mood_handles_empty_or_missing_beats():
+    assert render._classify_mood([]) == "documentary"
+    assert render._classify_mood(None) == "documentary"
+    assert render._classify_mood([{"entity_type": "place"}]) == "documentary"
+
+
+def test_classify_mood_does_not_substring_match_unrelated_words():
+    # "war" must not fire on "warm"/"warrior"/"reward" — whole-word matching only.
+    beats = [{"text": "The warm afternoon reward for the warrior was a quiet reunion."}]
+    assert render._classify_mood(beats) == "documentary"
+
+
+def test_music_tracks_falls_back_to_flat_pool_for_unknown_mood():
+    # documentary/ always exists in this repo; a mood with no directory (or an empty
+    # one) must still return *something* rather than silently dropping the music bed.
+    tracks = render._music_tracks("not-a-real-mood")
+    assert tracks  # real files on disk, not mocked
+    assert all(p.suffix == ".mp3" for p in tracks)
+
+
+def test_music_tracks_prefers_the_matched_mood_directory():
+    tense_tracks = render._music_tracks("tense")
+    assert tense_tracks
+    assert all(p.parent.name == "tense" for p in tense_tracks)

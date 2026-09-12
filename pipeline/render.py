@@ -181,17 +181,75 @@ def _zoompan_expr(px: float, py: float, zoom_in: bool, index: int, frames: int) 
     return z, x, y
 
 
-def _music_tracks() -> list[Path]:
+_WORD_RE = re.compile(r"[a-z']+")
+
+# Coarse tone classification (Professional Quality Roadmap Tier 3 #11) — whole-word
+# matching against each beat's own narration text, not substring matching, so e.g. "war"
+# doesn't false-positive on "warm"/"warrior"/"reward". Deliberately a short, high-
+# precision list per mood rather than an exhaustive one: a false "documentary" (the
+# default/no-signal case) is a safe miss, a wrong mood swap is not.
+_MOOD_KEYWORDS: dict[str, set[str]] = {
+    "tense": {
+        "war", "wars", "warfare", "battle", "battles", "attack", "attacked", "attacks",
+        "execution", "executed", "betray", "betrayed", "betrayal", "danger", "dangerous",
+        "murder", "murdered", "assassin", "assassinated", "assassination", "fear",
+        "afraid", "escape", "escaped", "siege", "captured", "capture", "torture",
+        "tortured", "threat", "threatened", "enemy", "enemies", "fight", "fought",
+        "kill", "killed", "blood", "bloody", "conspiracy", "plot", "revolt", "uprising",
+        "rebellion", "invasion", "invaded", "hunted", "trapped", "ambush",
+    },
+    "somber": {
+        "death", "died", "dying", "dead", "grief", "loss", "lost", "tragedy", "tragic",
+        "mourning", "mourned", "funeral", "extinct", "extinction", "disaster", "farewell",
+        "buried", "grave", "sorrow", "wept", "weeping", "ashes", "ruins", "vanished",
+        "forgotten", "lonely", "despair", "starvation", "starved", "plague", "famine",
+        "collapse", "collapsed", "destroyed", "destruction",
+    },
+    "uplifting": {
+        "triumph", "triumphant", "hope", "hopeful", "joy", "joyful", "discover",
+        "discovered", "discovery", "celebrate", "celebrated", "celebration", "victory",
+        "victorious", "inspire", "inspired", "inspiring", "breakthrough", "achieve",
+        "achieved", "achievement", "wonder", "wondrous", "miracle", "love", "loved",
+        "reunite", "reunited", "rescue", "rescued", "saved", "freedom", "liberated",
+        "liberation", "healed", "recovered", "hero", "heroic", "proud", "pride",
+    },
+}
+
+
+def _classify_mood(beats: list[dict] | None) -> str:
+    """Picks a mood bucket from the beats' own narration text — falls back to
+    "documentary" (the original, always-present bucket) when nothing scores, which
+    covers both a genuinely neutral story and any mood whose directory doesn't exist
+    yet (see _music_tracks' own directory-exists fallback for the latter case too)."""
+    if not beats:
+        return "documentary"
+    words = _WORD_RE.findall(" ".join(b.get("text", "") for b in beats).lower())
+    if not words:
+        return "documentary"
+    scores = {mood: sum(1 for w in words if w in kws) for mood, kws in _MOOD_KEYWORDS.items()}
+    best_mood, best_score = max(scores.items(), key=lambda kv: kv[1])
+    return best_mood if best_score > 0 else "documentary"
+
+
+def _music_tracks(mood: str | None = None) -> list[Path]:
     if not MUSIC_DIR.is_dir():
         return []
+    if mood:
+        mood_dir = MUSIC_DIR / mood
+        if mood_dir.is_dir():
+            tracks = [p for p in mood_dir.rglob("*.mp3") if p.is_file()]
+            if tracks:
+                return tracks
     return [p for p in MUSIC_DIR.rglob("*.mp3") if p.is_file()]
 
 
-def _pick_music() -> Path | None:
-    """Random track under pipeline/assets/music/ (see documentary/SOURCE.md for
-    licensing — all CC0). A single flat mood pool for now; picking by topic/tone is a
-    natural follow-up once there's more than a handful of tracks to choose between."""
-    tracks = _music_tracks()
+def _pick_music(beats: list[dict] | None = None) -> Path | None:
+    """Track from the mood bucket classified from the beats' own text (see
+    _classify_mood) when one matches and has tracks; otherwise any track under
+    pipeline/assets/music/ (see documentary/SOURCE.md and the per-mood SOURCE.md files
+    for licensing — all CC0). Falls back to the flat pool rather than returning None so
+    an unclassified/neutral story still gets a music bed."""
+    tracks = _music_tracks(_classify_mood(beats))
     return random.choice(tracks) if tracks else None
 
 
@@ -227,7 +285,7 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict], fon
     audio_input_index = n
     cmd += ["-i", audio_path]
 
-    music_path = _pick_music()
+    music_path = _pick_music(beats)
     music_input_index = None
     if music_path is not None:
         music_input_index = n + 1
