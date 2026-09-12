@@ -13,7 +13,7 @@ from flask import Flask, jsonify
 def create_app() -> Flask:
     from werkzeug.middleware.proxy_fix import ProxyFix
 
-    from . import admin, auth, db, editor, studio
+    from . import admin, auth, db, editor, gpu_worker, studio
     from .cli import register_cli
     from .config import load_config
     from .extensions import csrf, limiter, login_manager
@@ -38,6 +38,7 @@ def create_app() -> Flask:
     app.register_blueprint(admin.bp)
     app.register_blueprint(studio.bp)
     app.register_blueprint(editor.bp)
+    app.register_blueprint(gpu_worker.bp)
     register_cli(app)
 
     @app.teardown_appcontext

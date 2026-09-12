@@ -86,3 +86,31 @@ def test_get_pipeline_is_sticky_after_a_load_failure(monkeypatch):
     monkeypatch.setattr(illustrate, "_pipeline", None)
     monkeypatch.setattr(illustrate, "_load_failed", True)
     assert illustrate._get_pipeline() is None
+
+
+# --- Multi-subject/crowd prompt gate (#66) -------------------------------------------
+# A real, reproduced SD-Turbo failure mode (see this module's own docstring and
+# Claude outputs/OPEN_ISSUES.md #66): a "Roman legion marching" prompt this session
+# actually generated came out as a degenerate repetitive pattern of malformed tiny
+# figures, not a borderline case. pipeline/fetch_visuals.py checks this BEFORE ever
+# creating a remote illustration job for a beat.
+
+def test_is_multi_subject_prompt_true_for_a_real_reproduced_failure_case():
+    assert illustrate.is_multi_subject_prompt("a Roman legion marching, many soldiers") is True
+
+
+def test_is_multi_subject_prompt_false_for_single_subject_prompts():
+    assert illustrate.is_multi_subject_prompt("a Roman general portrait bust") is False
+    assert illustrate.is_multi_subject_prompt("a quiet street at dawn") is False
+
+
+def test_is_multi_subject_prompt_whole_word_match_only():
+    # "team" must fire on "the team celebrated" but nothing should fire on an unrelated
+    # substring (same discipline as render.py's _classify_mood).
+    assert illustrate.is_multi_subject_prompt("the team celebrated their victory") is True
+    assert illustrate.is_multi_subject_prompt("a steamship crossing the Atlantic") is False
+
+
+def test_is_multi_subject_prompt_handles_empty_query():
+    assert illustrate.is_multi_subject_prompt("") is False
+    assert illustrate.is_multi_subject_prompt(None) is False

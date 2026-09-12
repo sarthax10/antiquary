@@ -104,100 +104,92 @@ def test_face_or_portrait_fallback_prefers_a_real_detected_face(tmp_path, monkey
     assert result == [0.42, 0.5]
 
 
-# --- Illustrated visual style (genre-strategy fork, see OPEN_ISSUES.md #56 and
-# PROFESSIONAL_QUALITY_ROADMAP.md §7 item 12) --------------------------------------
+# --- Unified real-sourcing + ranked-illustration flow (Claude outputs/
+# OPEN_ISSUES.md #66 — replaces the old fixed "photographic"/"illustrated" style
+# fork). The real remote-worker round trip and the real GPU/model path are each
+# verified separately (illustration_jobs against a real local server — see
+# test_illustration_jobs_real_round_trip.py-style verification in OPEN_ISSUES.md #66;
+# illustrate.py against real hardware, see OPEN_ISSUES.md #61). These tests confirm
+# fetch_visuals._fetch_one's own wiring/decision logic with everything below it mocked.
 
-def test_illustrated_seed_biases_person_beats_warm():
-    for i in range(6):
-        assert fv._illustrated_seed(i, "person") in fv._WARM_PALETTE_INDICES
-
-
-def test_illustrated_seed_biases_non_person_beats_cool():
-    for entity_type in ("place", "event", "scene"):
-        for i in range(6):
-            assert fv._illustrated_seed(i, entity_type) in fv._COOL_PALETTE_INDICES
-
-
-def test_illustrated_seed_varies_across_consecutive_beats_of_the_same_type():
-    seeds = [fv._illustrated_seed(i, "person") for i in range(3)]
-    assert len(set(seeds)) > 1  # not stuck on one palette for a whole video
-
-
-def test_fetch_one_illustrated_style_never_calls_real_sourcing(tmp_path, monkeypatch):
-    # Real network calls would fail/hang in a test environment anyway, but the actual
-    # point being verified is behavioral: illustrated mode must not even attempt
-    # Wikidata/Commons/Pexels sourcing, not just tolerate them failing.
-    def _boom(*a, **kw):
-        raise AssertionError("illustrated style must not call real sourcing")
-
-    monkeypatch.setattr(fv, "_fetch_person", _boom)
-    monkeypatch.setattr(fv, "_fetch_generic", _boom)
-    monkeypatch.setattr(fv.illustrate, "gpu_illustration_available", lambda: False)
-
-    beat = {"visual_query": "irrelevant", "entity_type": "person"}
-    asset = fv.fetch_one(beat, tmp_path / "img_00", seed=0, style="illustrated")
-    assert asset["source"] == "illustrated"
-    assert asset["entity_type"] == "person"
-    assert asset["face"] is None
-    assert Path(asset["path"]).suffix == ".mp4"
-    assert Path(asset["path"]).exists()
-
-
-# --- GPU-based illustration generation (see OPEN_ISSUES.md #61) ---------------------
-# The real model/GPU path is verified separately against actual hardware (a real RTX
-# 3060 run, images inspected). These tests confirm fetch_visuals.py's own wiring: it
-# tries GPU generation first when available, uses its result correctly, and falls back
-# cleanly to the animated backdrop when generation reports failure — all with
-# illustrate's real functions mocked out, not a real GPU/model call.
-
-def test_fetch_illustrated_uses_gpu_result_when_available(tmp_path, monkeypatch):
-    monkeypatch.setattr(fv.illustrate, "gpu_illustration_available", lambda: True)
-    monkeypatch.setattr(fv.illustrate, "illustration_prompt", lambda q, e: f"prompt for {q}")
-
-    def _fake_generate(prompt, out_path, seed=None):
-        out_path.write_bytes(b"fake png bytes")
-        return True
-
-    monkeypatch.setattr(fv.illustrate, "generate_illustration", _fake_generate)
-
-    asset = fv._fetch_illustrated(tmp_path / "img_00", seed=0, entity_type="person", visual_query="a general")
-    assert asset["source"] == "illustrated_gpu"
-    assert Path(asset["path"]).suffix == ".png"
-    assert Path(asset["path"]).exists()
-    assert asset["face"] is None
-
-
-def test_fetch_illustrated_falls_back_when_gpu_generation_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr(fv.illustrate, "gpu_illustration_available", lambda: True)
-    monkeypatch.setattr(fv.illustrate, "illustration_prompt", lambda q, e: "a prompt")
-    monkeypatch.setattr(fv.illustrate, "generate_illustration", lambda *a, **kw: False)
-
-    asset = fv._fetch_illustrated(tmp_path / "img_00", seed=0, entity_type="place", visual_query="a city")
-    assert asset["source"] == "illustrated"  # NOT illustrated_gpu — the fallback fired
-    assert Path(asset["path"]).suffix == ".mp4"
-    assert Path(asset["path"]).exists()
-
-
-def test_fetch_illustrated_skips_gpu_entirely_when_unavailable(tmp_path, monkeypatch):
-    monkeypatch.setattr(fv.illustrate, "gpu_illustration_available", lambda: False)
-
-    def _boom(*a, **kw):
-        raise AssertionError("must not attempt GPU generation when unavailable")
-
-    monkeypatch.setattr(fv.illustrate, "generate_illustration", _boom)
-    asset = fv._fetch_illustrated(tmp_path / "img_00", seed=0, entity_type="scene", visual_query="a river")
-    assert asset["source"] == "illustrated"
-
-
-def test_fetch_one_photographic_style_is_the_default_and_unchanged(monkeypatch, tmp_path):
-    # style defaults to "photographic" when not passed at all -- existing callers/tests
-    # (and the real photographic pipeline) must be unaffected by this feature's addition.
-    called = {}
-    monkeypatch.setattr(fv, "_fetch_generic", lambda *a, **kw: called.setdefault("hit", True) or
-                         {"path": tmp_path / "x.mp4", "source": "video", "entity_type": "scene", "face": None})
+def test_fetch_one_returns_real_asset_when_no_illustration_beats_it(tmp_path, monkeypatch):
+    real = {"path": tmp_path / "x.jpg", "source": "commons", "entity_type": "scene", "face": None}
+    Path(real["path"]).write_bytes(b"fake jpg")
+    monkeypatch.setattr(fv, "_fetch_generic", lambda *a, **kw: real)
+    monkeypatch.setattr(fv.illustration_jobs, "request_illustration", lambda *a, **kw: None)
     beat = {"visual_query": "a river", "entity_type": "scene"}
-    fv.fetch_one(beat, tmp_path / "img_00", seed=0)
-    assert called.get("hit") is True
+    asset = fv._fetch_one(beat, tmp_path / "img_00", seed=0)
+    assert asset is real
+
+
+def test_fetch_one_skips_illustration_entirely_when_real_asset_is_video(tmp_path, monkeypatch):
+    # Real footage of the actual subject beats any generated image outright — never
+    # worth the network round trip to find out (see this module's own docstring).
+    real = {"path": tmp_path / "x.mp4", "source": "video", "entity_type": "scene", "face": None}
+    monkeypatch.setattr(fv, "_fetch_generic", lambda *a, **kw: real)
+
+    def _boom(*a, **kw):
+        raise AssertionError("must not request illustration when real asset is video")
+
+    monkeypatch.setattr(fv.illustration_jobs, "request_illustration", _boom)
+    beat = {"visual_query": "a river", "entity_type": "scene"}
+    asset = fv._fetch_one(beat, tmp_path / "img_00", seed=0)
+    assert asset is real
+
+
+def test_fetch_one_skips_illustration_for_a_multi_subject_prompt(tmp_path, monkeypatch):
+    monkeypatch.setattr(fv, "_fetch_generic", lambda *a, **kw: None)
+
+    def _boom(*a, **kw):
+        raise AssertionError("must not request illustration for a crowd/multi-subject prompt")
+
+    monkeypatch.setattr(fv.illustration_jobs, "request_illustration", _boom)
+    beat = {"visual_query": "a crowd of soldiers marching", "entity_type": "event"}
+    asset = fv._fetch_one(beat, tmp_path / "img_00", seed=0)
+    assert asset["source"] == "placeholder"
+    assert asset["needs_keyword_card"] is True
+
+
+def test_fetch_one_uses_illustration_when_real_sourcing_finds_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(fv, "_fetch_person", lambda *a, **kw: None)
+    monkeypatch.setattr(fv.illustration_jobs, "request_illustration", lambda *a, **kw: b"fake png bytes")
+    beat = {"visual_query": "an obscure general", "entity_type": "person"}
+    asset = fv._fetch_one(beat, tmp_path / "img_00", seed=0)
+    assert asset["source"] == "illustrated_gpu"
+    assert Path(asset["path"]).exists()
+    assert Path(asset["path"]).read_bytes() == b"fake png bytes"
+
+
+def test_fetch_one_falls_to_placeholder_when_neither_real_nor_illustration_available(tmp_path, monkeypatch):
+    monkeypatch.setattr(fv, "_fetch_generic", lambda *a, **kw: None)
+    monkeypatch.setattr(fv.illustration_jobs, "request_illustration", lambda *a, **kw: None)
+    beat = {"visual_query": "a river", "entity_type": "scene"}
+    asset = fv._fetch_one(beat, tmp_path / "img_00", seed=0)
+    assert asset["source"] == "placeholder"
+    assert asset["needs_keyword_card"] is True
+    assert Path(asset["path"]).suffix == ".mp4"
+    assert Path(asset["path"]).exists()
+
+
+def test_fetch_one_ranks_real_against_illustration_when_both_exist(tmp_path, monkeypatch):
+    real = {"path": tmp_path / "x.jpg", "source": "commons", "entity_type": "scene", "face": None}
+    Path(real["path"]).write_bytes(b"fake jpg")
+    monkeypatch.setattr(fv, "_fetch_generic", lambda *a, **kw: real)
+    monkeypatch.setattr(fv.illustration_jobs, "request_illustration", lambda *a, **kw: b"fake png bytes")
+
+    winner = {"path": tmp_path / "winner.png", "source": "illustrated_gpu"}
+    called = {}
+
+    def _fake_rank(real_asset, illustration_asset):
+        called["real"], called["illustration"] = real_asset, illustration_asset
+        return winner, {"real": 0.5, "illustration": 0.9}
+
+    monkeypatch.setattr(fv.asset_ranking, "rank", _fake_rank)
+    beat = {"visual_query": "a river", "entity_type": "scene"}
+    asset = fv._fetch_one(beat, tmp_path / "img_00", seed=0)
+    assert asset is winner
+    assert called["real"] is real
+    assert called["illustration"]["source"] == "illustrated_gpu"
 
 
 # --- Internet Archive public-domain footage sourcing (see OPEN_ISSUES.md #62) --------

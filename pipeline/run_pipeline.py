@@ -129,7 +129,11 @@ def _cap_parallel(beats: list[dict], assets: list[dict], beat_audio: list[dict],
     return beats[:max_clips], assets[:max_clips], kept_audio
 
 
-def run(topic: str, visual_style: str = "photographic") -> str:
+def run(topic: str, visual_style: str = "documentary") -> str:
+    """visual_style is kept only as a label recorded on the resulting Story (see
+    app.models.generation_job.VALID_VISUAL_STYLES) — it no longer selects a different
+    sourcing/render code path (see Claude outputs/OPEN_ISSUES.md #66: the old
+    "photographic"/"illustrated" fork is merged into one ranked flow, always run)."""
     run_id = uuid.uuid4().hex[:10]
     work_dir = BASE_DIR / "media" / "tmp" / run_id
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -140,7 +144,7 @@ def run(topic: str, visual_style: str = "photographic") -> str:
 
         job_manager.set_stage("sourcing_visuals")
         visuals_dir = work_dir / "visuals"
-        assets = fetch_visuals.fetch_all(str(visuals_dir), script["beats"], style=visual_style)
+        assets = fetch_visuals.fetch_all(str(visuals_dir), script["beats"])
 
         job_manager.set_stage("recording_narration")
         voice = tts.pick_voice()
@@ -171,10 +175,11 @@ def run(topic: str, visual_style: str = "photographic") -> str:
                 "text": audio["text"],
                 "visual_query": audio.get("visual_query", ""),
                 "framing": audio.get("framing", generate_script.DEFAULT_FRAMING),
+                "needs_keyword_card": asset.get("needs_keyword_card", False),
             }
             for asset, audio in zip(assets, beat_audio)
         ]
-        render.render(str(narration_path), str(ass_path), str(video_path), beats_final, font=font, style=visual_style)
+        render.render(str(narration_path), str(ass_path), str(video_path), beats_final, font=font)
 
         story_timeline = timeline_module.build_timeline(
             beats=beats,
@@ -205,5 +210,5 @@ def run(topic: str, visual_style: str = "photographic") -> str:
 
 if __name__ == "__main__":
     topic = sys.argv[1] if len(sys.argv) > 1 else ""
-    visual_style = sys.argv[2] if len(sys.argv) > 2 else "photographic"
+    visual_style = sys.argv[2] if len(sys.argv) > 2 else "documentary"
     print(run(topic, visual_style))

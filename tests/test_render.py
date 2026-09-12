@@ -198,38 +198,44 @@ def test_render_skips_skin_tone_correction_for_non_person_still_image(monkeypatc
     assert render.SKIN_TONE_CORRECTION not in cmd_str
 
 
-def test_render_illustrated_style_gives_every_beat_an_overlay(monkeypatch):
+def test_render_needs_keyword_card_beat_gets_an_overlay(monkeypatch):
     # Real user report (OPEN_ISSUES.md #59): 3 of 4 beats in an illustrated video showed
     # nothing but the plain backdrop, since only a year mention triggered any overlay at
-    # all. A beat with no year must still get its own visual_query as a keyword card in
-    # illustrated style.
+    # all. A beat flagged needs_keyword_card (fetch_visuals.py couldn't find real
+    # imagery or a usable illustration) with no year must still get its own visual_query
+    # as a keyword card — see #66, which replaced the old style="illustrated" flag with
+    # this per-beat one.
     captured = _capture_ffmpeg_cmd(monkeypatch)
     beats = [{"path": "a.jpg", "entity_type": "event", "face": None, "duration": 3.0,
-              "text": "no year mentioned here", "visual_query": "Victory dance"}]
-    render.render("narration.mp3", "captions.ass", "out.mp4", beats, style="illustrated")
+              "text": "no year mentioned here", "visual_query": "Victory dance",
+              "needs_keyword_card": True}]
+    render.render("narration.mp3", "captions.ass", "out.mp4", beats)
     cmd_str = " ".join(captured["cmd"])
     assert "VICTORY DANCE" in cmd_str
     assert f"fontsize={render.motion_graphics.ILLUSTRATED_FONT_SIZE}" in cmd_str
 
 
-def test_render_photographic_style_does_not_add_keyword_overlay(monkeypatch):
-    # The default style must be completely unaffected by this feature — photographic
-    # mode relies on real imagery, not a graphic, for beats without a year.
+def test_render_without_needs_keyword_card_does_not_add_keyword_overlay(monkeypatch):
+    # A beat with real imagery (or an illustration good enough to win ranking) has no
+    # needs_keyword_card flag at all — must rely on that real imagery, not a graphic,
+    # for beats without a year.
     captured = _capture_ffmpeg_cmd(monkeypatch)
     beats = [{"path": "a.jpg", "entity_type": "event", "face": None, "duration": 3.0,
               "text": "no year mentioned here", "visual_query": "Victory dance"}]
-    render.render("narration.mp3", "captions.ass", "out.mp4", beats)  # default style
+    render.render("narration.mp3", "captions.ass", "out.mp4", beats)
     cmd_str = " ".join(captured["cmd"])
     assert "VICTORY DANCE" not in cmd_str
 
 
 def test_render_keyword_card_does_not_trigger_the_sfx_whoosh(monkeypatch):
-    # Sparing on purpose: illustrated mode's keyword card fires on nearly every beat, so
-    # it must NOT also trigger the accent whoosh (#18) — only a genuine year reveal does.
+    # Sparing on purpose: a needs_keyword_card beat's card fires on nearly every such
+    # beat, so it must NOT also trigger the accent whoosh (#18) — only a genuine year
+    # reveal does.
     captured = _capture_ffmpeg_cmd(monkeypatch)
     beats = [{"path": "a.jpg", "entity_type": "event", "face": None, "duration": 3.0,
-              "text": "no year mentioned here", "visual_query": "Victory dance"}]
-    render.render("narration.mp3", "captions.ass", "out.mp4", beats, style="illustrated")
+              "text": "no year mentioned here", "visual_query": "Victory dance",
+              "needs_keyword_card": True}]
+    render.render("narration.mp3", "captions.ass", "out.mp4", beats)
     cmd_str = " ".join(captured["cmd"])
     assert "whoosh" not in cmd_str
 
@@ -312,27 +318,28 @@ def test_build_timeline_plus_compile_ffmpeg_matches_pre_refactor_render(monkeypa
             {"path": "c.mp4", "entity_type": "event", "face": None, "duration": 3.0,
              "text": "The conflict changed Europe forever.", "visual_query": "European conflict",
              "framing": "hold_static"},
-        ], None, "photographic"),
-        ("illustrated_2beat", [
+        ], None),
+        ("needs_keyword_card_2beat", [
             {"path": "a.jpg", "entity_type": "person", "face": None, "duration": 4.0,
-             "text": "A general made a choice.", "visual_query": "Roman general portrait"},
+             "text": "A general made a choice.", "visual_query": "Roman general portrait",
+             "needs_keyword_card": True},
             {"path": "b.jpg", "entity_type": "place", "face": None, "duration": 4.0,
-             "text": "The senate chamber stood empty.", "visual_query": "Roman senate chamber"},
-        ], None, "illustrated"),
+             "text": "The senate chamber stood empty.", "visual_query": "Roman senate chamber",
+             "needs_keyword_card": True},
+        ], None),
         ("single_beat_with_font", [
             {"path": "a.jpg", "entity_type": "scene", "face": None, "duration": 5.0,
              "text": "Nobody expected what came next.", "visual_query": "a quiet street"},
-        ], {"name": "Bebas Neue", "size": 86, "uppercase": True, "avg_char_w": 38}, "photographic"),
+        ], {"name": "Bebas Neue", "size": 86, "uppercase": True, "avg_char_w": 38}),
     ]
 
-    for name, beats, font, style in test_cases:
+    for name, beats, font in test_cases:
         captured = _capture_ffmpeg_cmd(monkeypatch)
-        render.render("narration.mp3", "captions.ass", "out.mp4", [dict(b) for b in beats], font=font, style=style)
+        render.render("narration.mp3", "captions.ass", "out.mp4", [dict(b) for b in beats], font=font)
         cmd_via_render = captured["cmd"]
 
         _capture_ffmpeg_cmd(monkeypatch)  # re-fake ffprobe; this path issues no final-cmd subprocess.run
-        timeline = render.build_timeline("narration.mp3", "captions.ass", [dict(b) for b in beats],
-                                          font=font, style=style)
+        timeline = render.build_timeline("narration.mp3", "captions.ass", [dict(b) for b in beats], font=font)
         cmd_via_split = render.compile_ffmpeg(timeline, "out.mp4")
 
         assert cmd_via_split == cmd_via_render, f"[{name}] build_timeline()+compile_ffmpeg() diverged from render()"

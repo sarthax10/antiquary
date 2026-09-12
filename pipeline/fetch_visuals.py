@@ -1,37 +1,56 @@
 #!/usr/bin/env python3
-"""Fetch real visuals for a video, one asset per script beat (see generate_script.py) —
+"""Fetch visuals for a video, one asset per script beat (see generate_script.py) —
 actual filmed stock footage where a query matches something filmable, real archival
 images (Wikimedia Commons / Wikidata) for things only paintings/artifacts/portraits can
-show, otherwise a plain gradient as a last resort. Free, no paid tier needed.
+show, a real GPU-generated illustration when real sourcing comes up short (or loses a
+quality/relevance ranking to one — see asset_ranking.py), otherwise a plain gradient as
+a last resort. Free, no paid tier needed.
 
 Usage: fetch_visuals.py <out_dir> "<query 1>" "<query 2>" ...  (CLI form: plain scene
 queries, for manual testing — the real caller is run_pipeline.py, which passes full beat
 dicts with entity_type so a named person gets their actual portrait, see fetch_all()).
 
 One asset is fetched per beat, saved as <out_dir>/img_00.<ext>, img_01.<ext>, ... where
-<ext> is .mp4 for real video or .jpg for a still image — render.py tells them apart by
-extension. fetch_all() returns per-asset metadata (source, entity_type, detected face
+<ext> is .mp4 for real video or .jpg/.png for a still image — render.py tells them apart
+by extension. fetch_all() returns per-asset metadata (source, entity_type, detected face
 center) alongside each path, not just a bare path list, so render.py can frame a
 Ken Burns pan/zoom around an actual detected face instead of blind-cropping to center.
+
+As of Claude outputs/OPEN_ISSUES.md #66, there is no more "photographic" vs.
+"illustrated" style choice — every beat runs the same flow:
+1. Try real sourcing (see the source order below). A real VIDEO wins immediately and
+   skips illustration entirely — real footage of the actual subject beats any generated
+   image, no contest, and it's not worth a network round trip to find out.
+2. Unless the query reads as multi-subject/crowd (illustrate.is_multi_subject_prompt —
+   a real, reproduced SD-Turbo failure mode, see that module's docstring), request a
+   generated illustration from a remote GPU worker (pipeline/illustration_jobs.py),
+   with a real timeout. No worker online, no GPU, a bad generation, or a timeout all
+   fall straight through to "use whatever real sourcing found" — this is what "if this
+   system isn't available, use the normal flow" means in practice.
+3. If both a real still and an illustration exist, asset_ranking.rank() picks the
+   better one on real, computed signals (source tier + measured sharpness/resolution),
+   not a coin flip or a fixed preference.
+4. If neither exists, the same animated-gradient placeholder this pipeline has always
+   had as its last resort (_placeholder_clip) — flagged needs_keyword_card so render.py
+   can compensate with an on-screen keyword card instead of a bare backdrop.
 
 Source order:
 - entity_type == "person": Wikidata portrait (the P18 image claim on the Wikidata item
   matching the query) -> Wikimedia Commons keyword search -> Europeana -> Flickr
-  Commons -> Google Custom Search (license-filtered) -> gradient placeholder.
+  Commons -> Google Custom Search (license-filtered).
   Deliberately NO Pexels/NASA fallback here — Pexels is generic modern stock
   photography of anonymous models, and NASA's collection has no bearing on a person
   portrait; using either to stand in for a specific named historical figure is exactly
-  the "random dude" problem this beat-level sourcing exists to avoid. An honest
-  abstract placeholder is less misleading than the wrong face.
+  the "random dude" problem this beat-level sourcing exists to avoid.
 - everything else: Internet Archive (public-domain film, real footage preferred over
   generic stock) -> Pexels Video (needs PEXELS_API_KEY) -> Wikimedia Commons image ->
   NASA Images -> Europeana -> Flickr Commons -> Google Custom Search -> Pexels Photo
-  (needs PEXELS_API_KEY) -> gradient placeholder. Every source past Commons is real,
-  license-checked, and gracefully skipped (not a hard failure) when its own API key
-  isn't configured or it returns nothing relevant — see each source's own function for
-  its specific license-verification method (per-item rights metadata for Europeana/
-  Google CSE, agency-wide public-domain default for NASA, "no known restrictions" for
-  Flickr Commons specifically, not Flickr generally).
+  (needs PEXELS_API_KEY). Every source past Commons is real, license-checked, and
+  gracefully skipped (not a hard failure) when its own API key isn't configured or it
+  returns nothing relevant — see each source's own function for its specific
+  license-verification method (per-item rights metadata for Europeana/Google CSE,
+  agency-wide public-domain default for NASA, "no known restrictions" for Flickr
+  Commons specifically, not Flickr generally).
 """
 import math
 import os
@@ -46,7 +65,14 @@ import numpy as np
 import requests
 from PIL import Image
 
+import asset_ranking
 import illustrate
+import illustration_jobs
+
+# Kept as a small local constant rather than importing render.VIDEO_EXTS — these two
+# modules have never depended on each other (only run_pipeline.py imports both), and a
+# 4-item extension tuple duplicated once is cheaper than adding that coupling.
+_VIDEO_EXTS = (".mp4", ".mov", ".webm", ".m4v")
 
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
@@ -532,12 +558,6 @@ PLACEHOLDER_PALETTE = [
     ((60, 50, 25), (20, 16, 10)),   # aged brass/sepia core -> near-black edge
 ]
 
-# Warm palettes (ember/wine/brass) read as "human" and cool ones (teal/olive/indigo) as
-# "place/time" — a deliberate, not arbitrary, split used to bias illustrated-mode's
-# palette choice by entity_type (see _illustrated_seed) rather than picking blind.
-_WARM_PALETTE_INDICES = (0, 2, 5)
-_COOL_PALETTE_INDICES = (1, 3, 4)
-
 
 def _placeholder_clip(out_path: Path, seed: int, duration: float = 4.0, fps: int = 30) -> None:
     """Last-resort background when every real source misses for a beat — a genuinely
@@ -636,7 +656,7 @@ def _first_image_hit(query: str, sources: list[tuple]) -> tuple[str | None, str 
     return None, None
 
 
-def _fetch_person(query: str, out_base: Path, seed: int, entity_type: str) -> dict:
+def _fetch_person(query: str, out_base: Path, seed: int, entity_type: str) -> dict | None:
     try:
         portrait_url = _wikidata_portrait(query)
     except requests.exceptions.RequestException:
@@ -673,12 +693,10 @@ def _fetch_person(query: str, out_base: Path, seed: int, entity_type: str) -> di
         if asset:
             return asset
 
-    path = out_base.with_suffix(".mp4")
-    _placeholder_clip(path, seed)
-    return {"path": path, "source": "placeholder", "entity_type": entity_type, "face": None}
+    return None  # no real portrait found — caller (_fetch_one) tries illustration next
 
 
-def _fetch_generic(query: str, out_base: Path, seed: int, entity_type: str) -> dict:
+def _fetch_generic(query: str, out_base: Path, seed: int, entity_type: str) -> dict | None:
     # Internet Archive's public-domain film collections tried FIRST, before generic
     # Pexels stock — real period-appropriate historical footage (when it exists and
     # passes the relevance gate) belongs in a documentary ahead of generic modern
@@ -725,69 +743,71 @@ def _fetch_generic(query: str, out_base: Path, seed: int, entity_type: str) -> d
         if asset:
             return asset
 
-    path = out_base.with_suffix(".mp4")
-    _placeholder_clip(path, seed)
-    return {"path": path, "source": "placeholder", "entity_type": entity_type, "face": None}
+    return None  # no real footage/photo found — caller (_fetch_one) tries illustration next
 
 
-def _illustrated_seed(index: int, entity_type: str) -> int:
-    """Picks a PLACEHOLDER_PALETTE index for illustrated-mode's graphic backdrop —
-    biased warm for "person" beats, cool for everything else (see the palette-index
-    comment above), with the beat's own position mixed in so consecutive beats of the
-    same entity_type still get visibly different palettes rather than repeating."""
-    bucket = _WARM_PALETTE_INDICES if entity_type == "person" else _COOL_PALETTE_INDICES
-    return bucket[index % len(bucket)]
+def _request_illustration(out_base: Path, seed: int, entity_type: str, visual_query: str) -> dict | None:
+    """Asks a remote GPU worker for an illustration (pipeline/illustration_jobs.py) —
+    None on any failure (no worker online, timeout, bad generation): every failure mode
+    there is already caught and returns cleanly, so this never has to guess whether
+    it's safe to fall back to real-sourcing-only."""
+    prompt = illustrate.illustration_prompt(visual_query, entity_type)
+    image_bytes = illustration_jobs.request_illustration(prompt, seed=seed)
+    if not image_bytes:
+        return None
+    image_path = out_base.with_suffix(".illustration.png")
+    image_path.write_bytes(image_bytes)
+    return {"path": image_path, "source": "illustrated_gpu", "entity_type": entity_type,
+            "face": _face_or_portrait_fallback(image_path, entity_type)}
 
 
-def _fetch_illustrated(out_base: Path, seed: int, entity_type: str, visual_query: str = "") -> dict:
-    """Style == "illustrated" (see Claude outputs/OPEN_ISSUES.md #56/#61 and
-    PROFESSIONAL_QUALITY_ROADMAP.md §7 item 12's genre-strategy question — the user's
-    answer was to keep *both* the photographic-documentary approach and a motion-
-    graphics-forward one, and let the person generating a video choose).
-
-    Tries a real, locally-generated flat-vector illustration first (pipeline/
-    illustrate.py) when a GPU is actually present — a real per-beat image, not just a
-    colored backdrop. Falls back to the same animated graphic backdrop used as
-    photographic mode's honest, verified sourcing-failure fallback (_placeholder_clip —
-    see #16) whenever GPU generation isn't available or fails for any reason (no GPU on
-    this host, model load failure, OOM, ...) — every failure mode there returns cleanly,
-    so this never has to guess whether it's safe to fall back. No Wikidata/Commons/
-    Pexels calls either way. `source` distinguishes which path actually produced the
-    asset ("illustrated_gpu" vs. "illustrated") for logging/debugging."""
-    if illustrate.gpu_illustration_available():
-        image_path = out_base.with_suffix(".png")
-        prompt = illustrate.illustration_prompt(visual_query, entity_type)
-        if illustrate.generate_illustration(prompt, image_path, seed=seed):
-            return {"path": image_path, "source": "illustrated_gpu", "entity_type": entity_type, "face": None}
-
-    path = out_base.with_suffix(".mp4")
-    _placeholder_clip(path, _illustrated_seed(seed, entity_type))
-    return {"path": path, "source": "illustrated", "entity_type": entity_type, "face": None}
-
-
-def fetch_one(beat: dict, out_base: Path, seed: int, style: str = "photographic") -> dict:
-    """Returns {"path": Path, "source": str, "entity_type": str, "face": [fx,fy]|None}.
-    style: "photographic" (default — real sourced imagery/stock, unchanged behavior) or
-    "illustrated" (see _fetch_illustrated)."""
+def _fetch_one(beat: dict, out_base: Path, seed: int) -> dict:
+    """Returns {"path": Path, "source": str, "entity_type": str, "face": [fx,fy]|None,
+    "needs_keyword_card": bool}. See this module's own docstring for the unified
+    real-sourcing + ranked-illustration flow (Claude outputs/OPEN_ISSUES.md #66) this
+    replaces the old style="photographic"/"illustrated" fork with."""
     entity_type = beat.get("entity_type", "scene")
-    if style == "illustrated":
-        return _fetch_illustrated(out_base, seed, entity_type, beat.get("visual_query", ""))
-    query = beat["visual_query"]
-    if entity_type == "person":
-        return _fetch_person(query, out_base, seed, entity_type)
-    return _fetch_generic(query, out_base, seed, entity_type)
+    query = beat.get("visual_query", "")
+    real_asset = _fetch_person(query, out_base, seed, entity_type) if entity_type == "person" \
+        else _fetch_generic(query, out_base, seed, entity_type)
+
+    if real_asset is not None and Path(real_asset["path"]).suffix.lower() in _VIDEO_EXTS:
+        return real_asset  # real footage of the actual subject — never worth trying
+        # illustration on top of, see this module's docstring
+
+    illustration_asset = None
+    if not illustrate.is_multi_subject_prompt(query):
+        illustration_asset = _request_illustration(out_base, seed, entity_type, query)
+
+    if real_asset is None and illustration_asset is None:
+        path = out_base.with_suffix(".mp4")
+        _placeholder_clip(path, seed)
+        return {"path": path, "source": "placeholder", "entity_type": entity_type, "face": None,
+                "needs_keyword_card": True}
+    if real_asset is None:
+        return illustration_asset
+    if illustration_asset is None:
+        return real_asset
+
+    winner, scores = asset_ranking.rank(real_asset, illustration_asset)
+    print(f"[asset_ranking] {query!r}: real={scores['real']:.2f} "
+          f"illustration={scores['illustration']:.2f} -> {winner['source']}", file=sys.stderr)
+    return winner
 
 
-def fetch_all(out_dir: str, beats: list[dict], style: str = "photographic") -> list[dict]:
+def fetch_one(beat: dict, out_base: Path, seed: int) -> dict:
+    return _fetch_one(beat, out_base, seed)
+
+
+def fetch_all(out_dir: str, beats: list[dict]) -> list[dict]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     assets = []
     for i, beat in enumerate(beats):
-        if i > 0 and style != "illustrated":
-            time.sleep(0.8)  # be a polite API citizen, avoid rate limits — no external
-            # calls happen in illustrated mode, so there's nothing to be polite to.
+        if i > 0:
+            time.sleep(0.8)  # be a polite API citizen, avoid rate limits
         base = out / f"img_{i:02d}"
-        asset = fetch_one(beat, base, i, style=style)
+        asset = _fetch_one(beat, base, i)
         print(f"[{asset['source']}] {beat['visual_query']!r} ({asset['entity_type']}) -> {asset['path']}", file=sys.stderr)
         asset["path"] = str(asset["path"])
         assets.append(asset)

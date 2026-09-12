@@ -111,12 +111,12 @@ def restore_story(story_id):
 @bp.route("/generate", methods=["POST"])
 @approved_required
 def generate():
+    # No more client-chosen visual_style (see Claude outputs/OPEN_ISSUES.md #66 — the
+    # old "photographic"/"illustrated" fork is merged into one ranked flow); every new
+    # job is unconditionally VALID_VISUAL_STYLES[0] ("documentary").
     data = request.get_json(silent=True) or {}
     topic = (data.get("topic") or "").strip()
-    visual_style = (data.get("visual_style") or "photographic").strip()
-    if visual_style not in VALID_VISUAL_STYLES:
-        return jsonify(error=f"visual_style must be one of {VALID_VISUAL_STYLES}"), 400
-    started, message = job_manager.start(topic, user=current_user, visual_style=visual_style)
+    started, message = job_manager.start(topic, user=current_user, visual_style=VALID_VISUAL_STYLES[0])
     return jsonify(started=started, message=message)
 
 

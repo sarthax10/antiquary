@@ -73,7 +73,7 @@ def enqueue(
     topic: str = "",
     timeline: dict | None = None,
     clip_files: list[dict] | None = None,
-    visual_style: str = "photographic",
+    visual_style: str = "documentary",
 ) -> str:
     script = json.loads(open(script_json_path).read())
     duration = _probe_duration(video_path)

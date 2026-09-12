@@ -42,12 +42,13 @@ class Story(Base):
     needs_human_review = Column(Boolean, nullable=False, default=True)
     status = Column(String(16), nullable=False, default="pending", index=True)
     topic = Column(String(500), nullable=False, default="")
-    # "photographic" (real sourced imagery) or "illustrated" (motion-graphics-forward,
-    # no photographic sourcing at all) — see app.models.generation_job.VALID_VISUAL_STYLES
-    # and PROFESSIONAL_QUALITY_ROADMAP.md §7 item 12. Persisted per-story (not just on the
-    # transient GenerationJob row) so a future editor re-render stays visually consistent
-    # with how the video was originally generated.
-    visual_style = Column(String(20), nullable=False, default="photographic")
+    # Historical: "photographic"/"illustrated" for stories generated before the two
+    # fixed modes were merged into one ranked flow (Claude outputs/OPEN_ISSUES.md #66);
+    # "documentary" for every story since — see app.models.generation_job.
+    # VALID_VISUAL_STYLES. Persisted per-story (not just on the transient GenerationJob
+    # row) so a future editor re-render stays visually consistent with how the video was
+    # originally generated.
+    visual_style = Column(String(20), nullable=False, default="documentary")
     # The FilmPlan this story was (or, for anything rendered before this column
     # existed, WOULD project to) built from — see pipeline/film_plan.py and Claude
     # outputs/FILM_PLAN_ARCHITECTURE.md Milestone 1. Nullable: not yet populated by the

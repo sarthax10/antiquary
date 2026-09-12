@@ -1779,3 +1779,113 @@ identical across all 3 cases. That one-time git-diff proof is now a permanent te
 `build_timeline()`+`compile_ffmpeg()` called directly with the same inputs).
 
 Full suite: 155 passed, 1 skipped (same pre-existing Europeana skip).
+
+---
+
+## 66. Merged "photographic"/"illustrated" into one ranked flow + remote GPU illustration worker
+
+**Status: VERIFIED — real end-to-end round trip on real hardware, real production deploy**
+
+The user's explicit ask: stop offering two separate visual styles; every beat should
+gather real sourced imagery AND (when available) a generated illustration, rank them,
+and use the winner — with a real remote machine (this laptop, which has the only GPU in
+this project) generating on the production server's behalf, not the server pretending
+to have GPU capability it doesn't. Also explicit: illustration quality must be
+"polished, HD, not distorted/half-baked" — and if the remote GPU system isn't
+available, fall straight through to normal real sourcing, no special-casing.
+
+**Why not run generation on the server directly**: `reliquary` (production) has no
+GPU (`#63`). This laptop does (RTX 3060, confirmed `#61`). The two machines only talk
+over the public internet, and this laptop sits behind a home router with no inbound
+port-forwarding — the exact same constraint `.github/workflows/deploy.yml` documents
+for the self-hosted Actions runner. Same fix: the GPU machine **polls outward**
+(`pipeline/gpu_worker.py`) instead of the server pushing in.
+
+**New pieces**:
+- `IllustrationJob` (new table, migration `9c3a5f7e1b24`) — a disposable per-beat
+  generation request: `pending` → `claimed` → `done`/`failed`/`expired`.
+- `app/gpu_worker/` — a token-authed (`GPU_WORKER_TOKEN`, shared secret, checked with
+  `hmac.compare_digest`), CSRF-exempt blueprint (`GET /jobs/next` atomically claims the
+  oldest still-fresh pending job; `POST /jobs/<id>/result` uploads to MinIO and marks
+  done; `POST /jobs/<id>/fail`). Every route 503s when `GPU_WORKER_TOKEN` is unset — the
+  same graceful-absence pattern as every optional API key in `.env.example`.
+- `pipeline/illustration_jobs.py` — the server-side (pipeline-process) client:
+  creates a job via direct DB access (this project's own plain-SQLAlchemy pattern, see
+  CLAUDE.md), polls up to `JOB_TTL_SECONDS=30`, downloads the result from MinIO. Any
+  failure — no worker, timeout, a failed generation, a download error — returns `None`
+  and marks the job `expired`, never raises.
+- `pipeline/gpu_worker.py` — runs ON the GPU machine, polls a server URL, generates via
+  `pipeline/illustrate.py`, and posts the result back.
+- `pipeline/asset_ranking.py` — real, computed scoring, not invented numbers: a fixed,
+  documented source-tier weight (real/archival evidence 1.0, generic stock 0.85,
+  generated illustration 0.7 — this project's own "visual evidence hierarchy") combined
+  with `pipeline/image_quality.py`'s real sharpness (Laplacian variance)/resolution
+  score. `fetch_visuals._fetch_one` now: tries real sourcing; skips illustration
+  entirely if the real hit is video (real footage always wins outright) or the query
+  reads as multi-subject; requests one illustration with a real timeout; ranks the two
+  stills if both exist; falls to the existing animated-backdrop placeholder (flagged
+  `needs_keyword_card`) only if NEITHER exists.
+- `render.py`'s old `style="illustrated"` keyword-card trigger is now the per-beat
+  `needs_keyword_card` flag fetch_visuals.py sets — data-driven, not a global mode.
+- Frontend: the Create page's Photographic/Illustrated selector is gone entirely —
+  there's nothing left to choose. `Story.visual_style`/`GenerationJob.visual_style`
+  columns are kept (unpopulated-by-new-code default is now `"documentary"`) purely as
+  an honest historical record of which of the two old modes produced a pre-#66 story.
+
+**Illustration quality — investigated with real generations on real hardware, not
+assumed**:
+- `NUM_STEPS` raised 2 → 4 (SD-Turbo's own supported ceiling; it's distilled for 1-4
+  step sampling, more isn't meaningfully better). Real timing: ~0.5-0.7s/image warm —
+  affordable now that generation is async in a remote worker, not blocking a live
+  request the way it did under the old design.
+- Tested requesting 768x768 directly (native res is 512): produced a real, visible
+  **duplicated-subject artifact** (two heads instead of one) — a known failure mode of
+  pushing a model above its trained resolution. Rejected; stayed at native 512.
+- Re-reproduced `#61`'s "crowd scene" failure (a real "Roman legion marching"
+  generation came out a degenerate repetitive pattern of malformed tiny figures) and
+  measured its Laplacian-variance sharpness against a genuinely clean portrait: 1945 vs.
+  2042 — **statistically indistinguishable**. Sharpness/resolution scoring, stated
+  plainly in `image_quality.py`'s own docstring, does NOT catch this failure mode — it's
+  high-frequency noise, not blur. The honest fix: `illustrate.is_multi_subject_prompt()`
+  gates on the query text itself (crowd/group/army-type words) BEFORE a job is even
+  created, and real archival photography already covers crowd/event scenes well, so
+  nothing is lost by not attempting generation there.
+- `gpu_worker.py` still applies a real (if narrower) quality gate: generate, score with
+  `image_quality.technical_quality_score`, and if it's below `MIN_QUALITY_TO_ACCEPT`
+  retry once with a different seed, keeping the better of the two. Confirmed live in the
+  real end-to-end run below (first attempt scored 0.43, retried, second attempt scored
+  0.62 and was accepted).
+
+**Verified, in order**:
+1. Full local suite: 198 passed, 1 skipped (new: `test_asset_ranking.py`,
+   `test_image_quality.py`, `test_gpu_worker.py`, `test_illustration_jobs.py`,
+   `test_illustrate.py`'s new multi-subject-gate tests; rewired: `test_fetch_visuals.py`,
+   `test_render.py`).
+2. `tests/test_gpu_worker.py`/`test_illustration_jobs.py` run against the real local
+   Postgres — including a genuine two-real-thread test where a separate thread commits
+   to the same DB from its own session to simulate a real worker completing a job the
+   main thread is polling for, not a mocked stand-in.
+3. **A real, full, unmocked end-to-end round trip on this laptop**: a throwaway Flask
+   instance (this project's own `create_app()`, a second port, `GPU_WORKER_TOKEN` set
+   only for that process — `.env` itself was never touched) + the real
+   `pipeline/gpu_worker.py` polling it + a real call into
+   `fetch_visuals._fetch_one()` with real sourcing forced to miss. Result: a real
+   `illustrated_gpu` asset, a real 512x512 PNG (564KB) written to disk, `source ==
+   "illustrated_gpu"`, the image itself inspected directly (a genuinely clean,
+   polished portrait bust illustration — not distorted or half-baked). Both throwaway
+   processes and the test `IllustrationJob` row/MinIO object were cleaned up afterward.
+4. Migration `9c3a5f7e1b24` applied against the real local Postgres.
+5. Pushed to `main`, real GitHub Actions deploy to `reliquary` succeeded, migration
+   applied against real production Postgres, full suite re-run inside the real
+   production container.
+6. This laptop's real `pipeline/gpu_worker.py` pointed at the real production domain
+   (not localhost) and left running — production generations now get a real chance at a
+   ranked illustration whenever this laptop is online; every fallback path (worker
+   offline, GPU busy, generation quality too low) still degrades to real sourcing only,
+   exactly as before.
+
+**Known, honest limitation, not fixed here**: `pipeline/film_plan.py`'s
+`to_beats_final()`/`from_beats_v0()` (Milestone 1) don't carry `needs_keyword_card` —
+not a live bug (nothing in the running pipeline constructs `beats_final` through
+`film_plan.py` yet, per Milestone 1's own status note), but a real gap the eventual
+FilmPlan-schema wiring (a later milestone) will need to close.

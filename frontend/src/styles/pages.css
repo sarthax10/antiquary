@@ -105,9 +105,6 @@
 .chip:hover { color: var(--ink); border-color: var(--line-bright); background: var(--surface-2); }
 .chip[aria-pressed="true"] { color: var(--ink); border-color: var(--tungsten-line); background: var(--tungsten-soft); }
 
-.composer-style { margin-top: var(--s-5); }
-.composer-style .label { display: block; margin-bottom: var(--s-2); }
-
 .composer-foot {
   display: flex;
   align-items: center;

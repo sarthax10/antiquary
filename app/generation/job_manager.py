@@ -238,19 +238,19 @@ def _watch(proc: subprocess.Popen, job_id: int) -> None:
         db.remove_session()
 
 
-def start(topic: str, user, visual_style: str = "photographic") -> tuple[bool, str]:
+def start(topic: str, user, visual_style: str = "documentary") -> tuple[bool, str]:
     """Returns (started, message). Enqueues (status="queued") instead of refusing when a
     generation is already running — get_status() promotes the oldest queued job once
     nothing is. Refuses only if this same user already has a running or queued job of
     their own (one at a time per user, not one at a time globally-with-no-queue).
 
-    visual_style: falls back to "photographic" for anything not in VALID_VISUAL_STYLES —
-    defensive, since the real validation belongs at the route boundary (app/studio/
-    routes.py), not here; this is just a last-resort guard against a bad value ever
-    reaching the pipeline subprocess."""
+    visual_style: falls back to VALID_VISUAL_STYLES[0] ("documentary") for anything not
+    in VALID_VISUAL_STYLES — defensive, since the real validation belongs at the route
+    boundary (app/studio/routes.py), not here; this is just a last-resort guard against
+    a bad value ever reaching the pipeline subprocess."""
     global _current_proc
     if visual_style not in VALID_VISUAL_STYLES:
-        visual_style = "photographic"
+        visual_style = VALID_VISUAL_STYLES[0]
     with _lock:
         session = get_session()
         if user is not None:

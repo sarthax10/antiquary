@@ -360,7 +360,7 @@ class Timeline:
 
 def build_timeline(
     audio_path: str, ass_path: str, beats: list[dict],
-    font: dict | None = None, style: str = "photographic",
+    font: dict | None = None,
 ) -> Timeline:
     """Every editorial decision this pipeline makes about a video — transition style,
     Ken Burns framing, which motion graphic fires and when, sfx cue placement, music
@@ -376,12 +376,14 @@ def build_timeline(
     video's own captions instead of always defaulting to Anton (see
     motion_graphics.font_path_for() and OPEN_ISSUES.md audit #33).
 
-    `style`: "photographic" (default, unchanged behavior) or "illustrated" — in
-    illustrated mode, a beat with no year-callout still gets a motion-graphic keyword
-    card (see motion_graphics.beat_keyword_label) instead of nothing but the plain
-    animated backdrop. See OPEN_ISSUES.md #59: a real production run showed 3 of 4
-    beats in an illustrated video with no motion-graphic content at all, since
-    extract_year_label's trigger is narrow by design and most beats don't name a year."""
+    As of #66, there's no more "photographic" vs. "illustrated" style flag — a beat
+    with no year-callout gets a motion-graphic keyword card (see
+    motion_graphics.beat_keyword_label) whenever fetch_visuals.py flagged it
+    needs_keyword_card=True (its asset is the last-resort animated backdrop, not real
+    imagery or a generated illustration) instead of nothing but the plain backdrop. See
+    OPEN_ISSUES.md #59: a real production run showed 3 of 4 beats with no motion-graphic
+    content at all, since extract_year_label's trigger is narrow by design and most
+    beats don't name a year."""
     total_duration = get_audio_duration(audio_path)
     font_path = motion_graphics.font_path_for(font)
     beats = _cap_beats(beats, MAX_CLIPS)
@@ -476,16 +478,18 @@ def build_timeline(
         # A beat whose narration names a specific year gets an animated timeline-marker
         # graphic over its first ~2s — see motion_graphics.py for why this is a distinct
         # feature from the pan/zoom/transition treatment above, not more of the same.
-        # In illustrated mode specifically, a beat with no year still gets SOME
-        # motion-graphic content — its own visual_query as a smaller keyword card —
-        # instead of nothing but the plain animated backdrop (see #59: a real production
-        # run showed 3 of 4 beats with no motion graphic at all, since most beats don't
-        # name a year). Photographic mode is unaffected: it relies on real imagery, not
-        # a graphic, for beats without a year.
+        # A beat flagged needs_keyword_card (fetch_visuals.py couldn't find real
+        # imagery or a usable illustration, so its asset is the last-resort animated
+        # backdrop) with no year still gets SOME motion-graphic content — its own
+        # visual_query as a smaller keyword card — instead of nothing but the plain
+        # backdrop (see #59: a real production run showed 3 of 4 beats with no motion
+        # graphic at all, since most beats don't name a year). A beat with a real photo/
+        # video/illustration is unaffected: it relies on that real imagery, not a
+        # graphic, for beats without a year.
         year_label = motion_graphics.extract_year_label(beat.get("text", ""))
         overlay_label = year_label
         overlay_fontsize = motion_graphics.FONT_SIZE
-        if not overlay_label and style == "illustrated":
+        if not overlay_label and beat.get("needs_keyword_card"):
             overlay_label = motion_graphics.beat_keyword_label(beat)
             overlay_fontsize = motion_graphics.ILLUSTRATED_FONT_SIZE
         if overlay_label:
@@ -617,14 +621,12 @@ def compile_ffmpeg(timeline: Timeline, out_path: str) -> list[str]:
 
 def render(
     audio_path: str, ass_path: str, out_path: str, beats: list[dict],
-    font: dict | None = None, style: str = "photographic",
+    font: dict | None = None,
 ) -> None:
     """As of Milestone 2 (see FILM_PLAN_ARCHITECTURE.md), this is a thin wrapper:
     build_timeline() makes every editorial decision, compile_ffmpeg() mechanically
-    translates the result into a real ffmpeg command, this function just runs it.
-    Nothing about calling render() itself changed — same signature, same behavior,
-    same output — this split only changes what's INSIDE it."""
-    timeline = build_timeline(audio_path, ass_path, beats, font=font, style=style)
+    translates the result into a real ffmpeg command, this function just runs it."""
+    timeline = build_timeline(audio_path, ass_path, beats, font=font)
     cmd = compile_ffmpeg(timeline, out_path)
     subprocess.run(cmd, check=True)
 
