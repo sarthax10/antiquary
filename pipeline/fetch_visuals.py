@@ -36,6 +36,8 @@ import numpy as np
 import requests
 from PIL import Image
 
+import illustrate
+
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 PEXELS_VIDEO_API = "https://api.pexels.com/videos/search"
@@ -431,19 +433,27 @@ def _illustrated_seed(index: int, entity_type: str) -> int:
     return bucket[index % len(bucket)]
 
 
-def _fetch_illustrated(out_base: Path, seed: int, entity_type: str) -> dict:
-    """Style == "illustrated" (see Claude outputs/OPEN_ISSUES.md #56 and
+def _fetch_illustrated(out_base: Path, seed: int, entity_type: str, visual_query: str = "") -> dict:
+    """Style == "illustrated" (see Claude outputs/OPEN_ISSUES.md #56/#61 and
     PROFESSIONAL_QUALITY_ROADMAP.md §7 item 12's genre-strategy question — the user's
     answer was to keep *both* the photographic-documentary approach and a motion-
-    graphics-forward one, and let the person generating a video choose). Every beat gets
-    the same animated graphic backdrop already used as photographic mode's honest,
-    verified fallback (_placeholder_clip — see #16) instead of attempting photographic
-    stock sourcing at all: no Wikidata/Commons/Pexels calls, no risk of a mismatched or
-    low-quality stock result, and full control over the visual language (motion
-    graphics + kinetic typography carry the video, matching Kurzgesagt's own
-    illustrated register rather than chasing photorealism with uncontrollable source
-    quality). Distinct `source` value ("illustrated") from a genuine sourcing-failure
-    placeholder ("placeholder") so the two remain distinguishable in logs/debugging."""
+    graphics-forward one, and let the person generating a video choose).
+
+    Tries a real, locally-generated flat-vector illustration first (pipeline/
+    illustrate.py) when a GPU is actually present — a real per-beat image, not just a
+    colored backdrop. Falls back to the same animated graphic backdrop used as
+    photographic mode's honest, verified sourcing-failure fallback (_placeholder_clip —
+    see #16) whenever GPU generation isn't available or fails for any reason (no GPU on
+    this host, model load failure, OOM, ...) — every failure mode there returns cleanly,
+    so this never has to guess whether it's safe to fall back. No Wikidata/Commons/
+    Pexels calls either way. `source` distinguishes which path actually produced the
+    asset ("illustrated_gpu" vs. "illustrated") for logging/debugging."""
+    if illustrate.gpu_illustration_available():
+        image_path = out_base.with_suffix(".png")
+        prompt = illustrate.illustration_prompt(visual_query, entity_type)
+        if illustrate.generate_illustration(prompt, image_path, seed=seed):
+            return {"path": image_path, "source": "illustrated_gpu", "entity_type": entity_type, "face": None}
+
     path = out_base.with_suffix(".mp4")
     _placeholder_clip(path, _illustrated_seed(seed, entity_type))
     return {"path": path, "source": "illustrated", "entity_type": entity_type, "face": None}
@@ -455,7 +465,7 @@ def fetch_one(beat: dict, out_base: Path, seed: int, style: str = "photographic"
     "illustrated" (see _fetch_illustrated)."""
     entity_type = beat.get("entity_type", "scene")
     if style == "illustrated":
-        return _fetch_illustrated(out_base, seed, entity_type)
+        return _fetch_illustrated(out_base, seed, entity_type, beat.get("visual_query", ""))
     query = beat["visual_query"]
     if entity_type == "person":
         return _fetch_person(query, out_base, seed, entity_type)

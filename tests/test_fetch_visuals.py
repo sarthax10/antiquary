@@ -132,6 +132,7 @@ def test_fetch_one_illustrated_style_never_calls_real_sourcing(tmp_path, monkeyp
 
     monkeypatch.setattr(fv, "_fetch_person", _boom)
     monkeypatch.setattr(fv, "_fetch_generic", _boom)
+    monkeypatch.setattr(fv.illustrate, "gpu_illustration_available", lambda: False)
 
     beat = {"visual_query": "irrelevant", "entity_type": "person"}
     asset = fv.fetch_one(beat, tmp_path / "img_00", seed=0, style="illustrated")
@@ -140,6 +141,52 @@ def test_fetch_one_illustrated_style_never_calls_real_sourcing(tmp_path, monkeyp
     assert asset["face"] is None
     assert Path(asset["path"]).suffix == ".mp4"
     assert Path(asset["path"]).exists()
+
+
+# --- GPU-based illustration generation (see OPEN_ISSUES.md #61) ---------------------
+# The real model/GPU path is verified separately against actual hardware (a real RTX
+# 3060 run, images inspected). These tests confirm fetch_visuals.py's own wiring: it
+# tries GPU generation first when available, uses its result correctly, and falls back
+# cleanly to the animated backdrop when generation reports failure — all with
+# illustrate's real functions mocked out, not a real GPU/model call.
+
+def test_fetch_illustrated_uses_gpu_result_when_available(tmp_path, monkeypatch):
+    monkeypatch.setattr(fv.illustrate, "gpu_illustration_available", lambda: True)
+    monkeypatch.setattr(fv.illustrate, "illustration_prompt", lambda q, e: f"prompt for {q}")
+
+    def _fake_generate(prompt, out_path, seed=None):
+        out_path.write_bytes(b"fake png bytes")
+        return True
+
+    monkeypatch.setattr(fv.illustrate, "generate_illustration", _fake_generate)
+
+    asset = fv._fetch_illustrated(tmp_path / "img_00", seed=0, entity_type="person", visual_query="a general")
+    assert asset["source"] == "illustrated_gpu"
+    assert Path(asset["path"]).suffix == ".png"
+    assert Path(asset["path"]).exists()
+    assert asset["face"] is None
+
+
+def test_fetch_illustrated_falls_back_when_gpu_generation_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(fv.illustrate, "gpu_illustration_available", lambda: True)
+    monkeypatch.setattr(fv.illustrate, "illustration_prompt", lambda q, e: "a prompt")
+    monkeypatch.setattr(fv.illustrate, "generate_illustration", lambda *a, **kw: False)
+
+    asset = fv._fetch_illustrated(tmp_path / "img_00", seed=0, entity_type="place", visual_query="a city")
+    assert asset["source"] == "illustrated"  # NOT illustrated_gpu — the fallback fired
+    assert Path(asset["path"]).suffix == ".mp4"
+    assert Path(asset["path"]).exists()
+
+
+def test_fetch_illustrated_skips_gpu_entirely_when_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setattr(fv.illustrate, "gpu_illustration_available", lambda: False)
+
+    def _boom(*a, **kw):
+        raise AssertionError("must not attempt GPU generation when unavailable")
+
+    monkeypatch.setattr(fv.illustrate, "generate_illustration", _boom)
+    asset = fv._fetch_illustrated(tmp_path / "img_00", seed=0, entity_type="scene", visual_query="a river")
+    assert asset["source"] == "illustrated"
 
 
 def test_fetch_one_photographic_style_is_the_default_and_unchanged(monkeypatch, tmp_path):

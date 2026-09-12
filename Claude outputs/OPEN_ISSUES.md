@@ -1443,3 +1443,83 @@ measuring actual first-frame-vs-last-frame pixel difference in the output video:
 `push_in`=6.13, `pull_back`=6.12, `hold_static`=2.62 — a real, substantial (~2.3x),
 verified difference in rendered motion, not just different expression strings. Full
 suite: 116/116 pass.
+
+## 61. GPU-based real illustration generation for illustrated mode (two-tier: GPU / no-GPU)
+
+**Status: VERIFIED against real hardware — real images generated, real quality trade-offs found and documented, not oversold**
+
+The user's response to the illustrated-mode content gap (#59, and the broader "I want a
+complete illustration" ask): *"if the system has a GPU then support GPU generation
+(like this laptop) if it doesn't then real 2D motion graphics."* Investigated rather
+than assumed: this host turned out to have a real NVIDIA RTX 3060 (6GB VRAM) — `nvidia-
+smi` on the host confirmed it, but the running app container couldn't see it (no GPU
+device reservation in `docker-compose.yml`, no CUDA-enabled torch installed). A throwaway
+container with `--gpus all` confirmed Docker's GPU passthrough itself works fine on this
+host (`docker run --rm --gpus all nvidia/cuda:... nvidia-smi` succeeded) before any of
+the real feature work started — the risk was validated first, not assumed.
+
+**Architecture**: `pipeline/illustrate.py` — `stabilityai/sd-turbo` via `diffusers`,
+chosen specifically for speed (1-4 step, guidance-free generation) since this runs
+synchronously inside a pipeline a person is waiting on, not as a batch job. Generates at
+the model's native 512x512 and hands the result to `render.py` exactly like any other
+sourced still image — no new rendering path: the existing Ken Burns pan/zoom/framing-
+intent machinery (#13, shipped the same day) crops and animates a generated illustration
+the same way it would a photograph. `fetch_visuals._fetch_illustrated` tries GPU
+generation first (when `illustrate.gpu_illustration_available()` — a cheap check, no
+model load) and falls back to the existing animated backdrop (#16) on ANY failure: no
+GPU, model load failure, generation exception (OOM, etc.) — every failure mode in
+`illustrate.py` returns a clean `False`/`None` rather than raising, so `fetch_visuals.py`
+never has to guess whether a fallback is safe.
+
+**Kept optional, not a new hard dependency**: `requirements-gpu.txt` (diffusers/
+transformers/accelerate/safetensors — torch installed separately, first, from PyTorch's
+own `cu121` index, since a plain PyPI `torch` would silently be the CPU-only build) is
+installed only when the Dockerfile's `WITH_GPU_ILLUSTRATION` build arg is `"true"` —
+`docker-compose.yml` sets it for this specific, confirmed-GPU host, with a comment
+explaining exactly what to remove (the build arg AND the `deploy.resources.reservations.
+devices` GPU reservation, which is a hard requirement Compose enforces at container-start
+time) if this ever deploys to a non-GPU host. A non-GPU deploy target never pays for the
+~2.5GB+ download it has no use for.
+
+**Verified against the real hardware, at every level, not assumed working**:
+- A standalone feasibility test (before any pipeline wiring existed) confirmed real
+  numbers: model load ~10-30s (once per process — cached, not per beat), generation
+  ~0.4-2s per image once warm, ~3.25GB peak VRAM (comfortable alongside Ollama's own
+  usage in the 6GB budget).
+- The real app image was rebuilt (10.4GB, up from 1.89GB) and the container recreated
+  with actual GPU device access — confirmed live inside the real `antiquary-app`
+  container (`illustrate.gpu_illustration_available()` → `True`), not just in a
+  throwaway test container.
+- Full test suite re-run inside the GPU-enabled container: 119/119 pass. One real bug
+  the GPU environment itself exposed: an older test
+  (`test_fetch_one_illustrated_style_never_calls_real_sourcing`) had no reason to mock
+  `gpu_illustration_available` when it was written (no GPU existed to matter), so once
+  this host actually had one, that test started triggering a REAL ~2-minute GPU
+  generation instead of testing the intended fallback path — fixed by making the mock
+  explicit rather than relying on environment happenstance, a real lesson about not
+  writing tests that pass only by accident of the environment they were written in.
+- A real, unmocked end-to-end run: `fetch_visuals.fetch_all(style="illustrated")` →
+  real SD-Turbo generation for all 3 beats → `render.render()` with framing hints, real
+  narration, captions, and music/sfx from earlier this session all still active —
+  produced a valid 1080x1920 video, real duration match, both streams present.
+  Frames extracted and inspected directly (not assumed from ffmpeg exit code 0 alone).
+
+**Honest quality assessment — not oversold**: of the 3 extracted frames, two are
+genuinely strong (a detailed portrait bust correctly labeled "49 BCE" by the still-
+working motion-graphics overlay; a coherent, cinematic architectural render of a Roman
+senate chamber, arguably closer to the "cinematic documentary" reference the user also
+asked about than flat illustration) — but the third (a "Roman legion marching" crowd
+scene) came out visibly worse: repetitive, distorted figures, a real quality gap the
+2-step speed-optimized generation exposes on busy multi-subject compositions
+specifically, not on single-subject portraits or static architecture. This is recorded
+plainly rather than smoothed over: `NUM_STEPS=2` is a real speed/quality trade-off, and
+crowd/action prompts are where it shows. A real, deliberate follow-up (not done here):
+either bump steps selectively for busier prompts, or accept the trade-off as a known
+limitation of the fast-generation choice.
+
+**Not done in this pass**: content-moderation beyond whatever safety-checker component
+(if any) the model repo itself bundles — stated as a known, real limitation in
+`illustrate.py`'s own docstring, not silently absent. Also not done: making generation
+resolution/aspect-ratio-aware (relies entirely on render.py's existing crop/zoom to turn
+a 512x512 square into a 1080x1920 vertical frame, same as any other still image) — works,
+but a native vertical generation might frame better; untested against that alternative.

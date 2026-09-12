@@ -12,6 +12,20 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Optional GPU illustration stack (pipeline/illustrate.py — see OPEN_ISSUES.md #61).
+# Off by default so a non-GPU deploy target never pays for a multi-GB torch/diffusers
+# download it has no use for; docker-compose.yml sets this to "true" for this specific,
+# confirmed-GPU host (see its own comment). The code itself (illustrate.py) already
+# degrades gracefully if this was never installed — an absent GPU stack is a normal,
+# expected state there, not an error, so flipping this back to "false" on a future
+# non-GPU deploy target is the only change needed, nothing else in the app assumes it.
+ARG WITH_GPU_ILLUSTRATION=false
+COPY requirements-gpu.txt .
+RUN if [ "$WITH_GPU_ILLUSTRATION" = "true" ]; then \
+      pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu121 && \
+      pip install --no-cache-dir -r requirements-gpu.txt; \
+    fi
+
 COPY app/ app/
 COPY pipeline/ pipeline/
 COPY migrations/ migrations/

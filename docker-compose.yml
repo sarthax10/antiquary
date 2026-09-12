@@ -55,13 +55,31 @@ services:
     restart: "no"
 
   app:
-    build: .
+    build:
+      context: .
+      # Enables pipeline/illustrate.py's GPU-based illustration generation (see
+      # OPEN_ISSUES.md #61) — this specific host has a confirmed working NVIDIA GPU
+      # (RTX 3060, driver 561.09, CUDA 12.6) with working Docker passthrough. Set to
+      # "false" (or drop this whole build.args block) if this compose file is ever
+      # deployed to a host without a GPU — the code degrades gracefully either way, but
+      # the `deploy.reservations.devices` block below is a hard requirement Docker
+      # Compose enforces at container-start time, not an optional hint, so it must come
+      # out too on a non-GPU host or the app container will fail to start entirely.
+      args:
+        WITH_GPU_ILLUSTRATION: "true"
     container_name: antiquary-app
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       S3_ENDPOINT_URL: http://minio:9000
       OLLAMA_HOST: http://ollama:11434
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     volumes:
       - media_data:/app/media
     depends_on:
