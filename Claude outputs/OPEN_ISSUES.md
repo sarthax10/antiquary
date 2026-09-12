@@ -1578,3 +1578,71 @@ beat that only needs ~3 seconds of it) — render.py's existing `-stream_loop -1
 <duration>` trims what's actually used at render time, so this doesn't break anything,
 but it is a heavier download than Pexels' typically-short clips for the same few seconds
 of usable footage. Not addressed in this pass.
+
+## 63. Broken production deploy + a real infrastructure discovery: this laptop is NOT the production server
+
+**Status: RESOLVED — production restored, and a genuine gap in this session's own verification methodology found and fixed**
+
+Pushing the GPU illustration work broke the real production deploy: `deploy.resources.
+reservations.devices` (the GPU device reservation added for #61) is a hard requirement
+Docker Compose enforces at container-start time, and the production deploy failed twice,
+deterministically, with `Error response from daemon: could not select device driver
+"nvidia" with capabilities: [[gpu]]`.
+
+Investigating *why* led to a real, important discovery: **this Windows laptop is not the
+production server.** It has its own separate, local Docker stack (`antiquary-app`,
+`postgres`, `minio`, `ollama` — no `caddy`, no `netdata`) that this entire session's
+`docker exec`/`docker cp`/`docker restart`/`docker compose build` commands had been
+operating on. The real production server is `reliquary` — a genuinely different remote
+machine, SSH-accessible (`archivum@reliquary`, confirmed working with a key already
+present in `~/.ssh/`), with its own complete stack including `caddy` (the actual public
+entry point at `antiquary.duckdns.org`) and `netdata`. Confirmed conclusively: this
+laptop's local Postgres had a completely different, disjoint set of recent stories than
+`reliquary`'s real database, and `reliquary` has **no GPU at all**
+(`nvidia-smi: command not found` — not a passthrough issue like initially assumed, there
+is simply no NVIDIA hardware on that machine).
+
+**Real consequence of this gap**: everything this session verified via direct `docker
+exec`/manual container manipulation (the GPU illustration generation, the real SD-Turbo
+images sent earlier) was real and correct as *code*, but was only ever exercised against
+this laptop's local sandbox — never against the actual live site. Features that reached
+production correctly throughout this session did so only via git push → GitHub Actions
+CI/CD deploy (confirmed via `gh run watch` each time) — that path was always hitting
+`reliquary` correctly. It was specifically the *manual* verification steps (direct
+`docker` commands, Browser-pane UI clicks against `localhost:5173`) that were checking
+the wrong target without either of us noticing until the GPU deploy failure forced the
+question. Worth naming plainly: this is a real gap in this session's own "verify against
+the real stack" discipline — the stack being verified wasn't always the right one.
+
+**Fix**: removed the hard GPU device reservation from `docker-compose.yml` entirely
+(kept `WITH_GPU_ILLUSTRATION=true` so the image still carries torch/diffusers —
+`illustrate.py`'s own `torch.cuda.is_available()` check safely returns `False` with no
+device attached, falling back to the 2D motion-graphics illustrated mode automatically,
+exactly the graceful-degradation path #61 was built around). Redeployed: succeeded,
+health check passed, `docker inspect` on `reliquary` confirmed the container was
+genuinely recreated (not a stale one, unlike the laptop-side confusion above). Full test
+suite re-run directly on `reliquary` itself: 136/136 pass (includes the real live
+Internet Archive API test).
+
+**Then closed the actual verification gap**, not just fixed the immediate break: ran a
+real illustrated-mode generation directly on `reliquary` (`docker exec ... run_pipeline.py
+"The strangest weapon used in World War 2" illustrated`, as the real admin user) — a
+genuine Ollama-written script, real TTS, real render, story id `26427acf8c90`, 4 beats
+(3 with no year, 1 with "In 1944"). Downloaded the real rendered video from MinIO and
+extracted frames from all 4 beats: every single one shows its correct overlay — the year
+card for the 1944 beat, and real keyword cards ("WWII CLASSIFIED DOCUMEN...", "US
+MILITARY LABORATORY...", "WWII MEMORIAL") for the other three, each correctly
+synchronized with its own caption text. The #59 fix is now genuinely confirmed working
+on the actual production server with real generated content, not just reproduced
+locally. (This test story is real and sits in the real review queue — left for the user
+to review/reject like any other generation, not deleted.)
+
+**GPU illustration generation (#61), status update given this discovery**: the feature
+itself, the code, and the two-tier design are all still correct and real — but "GPU
+generation on this laptop" and "GPU generation on the live site" are two different
+claims, and only the first is currently true. `reliquary` has no GPU hardware at all, so
+the public site's illustrated mode runs exclusively in the 2D-motion-graphics fallback
+today. Getting real GPU illustration onto the actual live site would need either GPU
+hardware added to `reliquary` itself, or a deliberate infrastructure decision about
+where generation should run — not something to solve unilaterally; flagging it as a real
+open question rather than a bug.
