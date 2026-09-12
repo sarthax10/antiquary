@@ -198,3 +198,126 @@ def test_fetch_one_photographic_style_is_the_default_and_unchanged(monkeypatch, 
     beat = {"visual_query": "a river", "entity_type": "scene"}
     fv.fetch_one(beat, tmp_path / "img_00", seed=0)
     assert called.get("hit") is True
+
+
+# --- Internet Archive public-domain footage sourcing (see OPEN_ISSUES.md #62) --------
+# A real, legally clean alternative to scraping YouTube (the user's other explicit
+# "yes" answer, given YouTube's own ToS risk). The relevance-gating logic (mocked HTTP
+# below) is the load-bearing part to unit-test — Internet Archive's catalog is strong
+# for 20th-century footage but a keyword search can false-positive on pre-film-era
+# topics via a shared word (see _archive_org_search's own docstring for the real
+# "ancient Rome" vs. "Advance on Rome" example this guards against). One real,
+# unmocked call against the live API closes the loop — confirms the actual endpoint
+# still behaves as this was designed against, not just the mocked shape of it.
+
+def test_archive_significant_words_strips_stopwords_and_short_tokens():
+    words = fv._archive_significant_words("The Battle of the Somme, in 1916")
+    assert "the" not in words
+    assert "of" not in words
+    assert "in" not in words
+    assert "battle" in words
+    assert "somme" in words
+    assert "1916" in words
+
+
+def test_archive_org_search_accepts_a_strong_title_match(monkeypatch):
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"response": {"docs": [
+                {"identifier": "ddday1944", "title": "Normandy D-Day Landing Footage 1944"},
+            ]}}
+
+    monkeypatch.setattr(fv.requests, "get", lambda *a, **kw: _FakeResp())
+    assert fv._archive_org_search("D-Day Normandy landing") == "ddday1944"
+
+
+def test_archive_org_search_rejects_a_single_shared_word_false_positive(monkeypatch):
+    # The real bug case this guards against: a 1944 newsreel about the Allied advance
+    # ON the city of Rome must NOT be accepted for a query about ANCIENT Rome just
+    # because both titles contain the word "Rome".
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"response": {"docs": [
+                {"identifier": "advance1944", "title": "Advance on Rome, 1944"},
+            ]}}
+
+    monkeypatch.setattr(fv.requests, "get", lambda *a, **kw: _FakeResp())
+    assert fv._archive_org_search("ancient Rome") is None
+
+
+def test_archive_org_search_returns_none_when_no_docs():
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"response": {"docs": []}}
+
+    import unittest.mock
+    with unittest.mock.patch.object(fv.requests, "get", return_value=_FakeResp()):
+        assert fv._archive_org_search("anything") is None
+
+
+def test_archive_org_video_url_prefers_the_512kb_derivative(monkeypatch):
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"files": [
+                {"name": "Example_edit.mp4"},
+                {"name": "Example_512kb.mp4"},
+                {"name": "Example.ogv"},
+            ]}
+
+    monkeypatch.setattr(fv.requests, "get", lambda *a, **kw: _FakeResp())
+    url = fv._archive_org_video_url("Example")
+    assert url == "https://archive.org/download/Example/Example_512kb.mp4"
+
+
+def test_archive_org_video_url_falls_back_to_any_mp4_if_no_512kb(monkeypatch):
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"files": [{"name": "Example_edit.mp4"}, {"name": "Example.ogv"}]}
+
+    monkeypatch.setattr(fv.requests, "get", lambda *a, **kw: _FakeResp())
+    url = fv._archive_org_video_url("Example")
+    assert url == "https://archive.org/download/Example/Example_edit.mp4"
+
+
+def test_archive_org_video_url_none_when_no_mp4_at_all(monkeypatch):
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"files": [{"name": "Example.ogv"}]}
+
+    monkeypatch.setattr(fv.requests, "get", lambda *a, **kw: _FakeResp())
+    assert fv._archive_org_video_url("Example") is None
+
+
+def test_archive_org_search_real_api_returns_relevant_public_domain_result():
+    # One real, unmocked call against the live archive.org API — a genuine, specific,
+    # well-documented WWII search term that should reliably have real public-domain
+    # footage. Skips (doesn't fail the suite) if the network/API is unreachable, same
+    # spirit as this project's other real-network tests staying honest about
+    # environment dependence rather than silently mocking it away entirely.
+    import pytest
+    try:
+        identifier = fv._archive_org_search("D-Day Normandy invasion")
+    except fv.requests.exceptions.RequestException:
+        pytest.skip("archive.org unreachable from this environment")
+    assert identifier is not None
+    url = fv._archive_org_video_url(identifier)
+    assert url is not None
+    assert url.startswith("https://archive.org/download/")

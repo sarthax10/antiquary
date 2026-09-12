@@ -1523,3 +1523,58 @@ limitation of the fast-generation choice.
 resolution/aspect-ratio-aware (relies entirely on render.py's existing crop/zoom to turn
 a 512x512 square into a 1080x1920 vertical frame, same as any other still image) — works,
 but a native vertical generation might frame better; untested against that alternative.
+
+## 62. Internet Archive public-domain footage sourcing for photographic mode
+
+**Status: VERIFIED — real search, real relevance bug found and fixed, real download confirmed playable**
+
+The other half of the user's "use video clips that are free to use... including YouTube
+if it's free to use" ask. Flagged the real problem with YouTube specifically rather
+than building it anyway: downloading from YouTube generally violates YouTube's own ToS
+regardless of the source video's license — a separate legal question from whether the
+footage itself is CC-licensed. The user's explicit answer, given that trade-off: add
+Internet Archive's public-domain film collections instead — confirmed reachable and
+genuinely license-clean (not just "collection name suggests public domain": every real
+result checked carries an explicit `licenseurl` of `creativecommons.org/publicdomain/...`
+or `.../publicdomain/zero/1.0/`).
+
+`fetch_visuals._archive_org_search`/`_archive_org_video_url` query
+`archive.org/advancedsearch.php` filtered to `mediatype:(movies)` AND a public-domain
+license, tried in `_fetch_generic` BEFORE generic Pexels stock (real period-appropriate
+historical footage, when it exists, belongs ahead of generic modern stock of the same
+subject) — falls straight through to the existing Pexels/Commons waterfall on any miss,
+purely additive.
+
+**A real relevance problem found through actual research, not assumed**: real test
+searches showed Internet Archive's catalog is strong for 20th-century subject matter
+(a "D-Day Normandy landing" search returned 13 genuinely on-topic, license-clean
+results) but essentially empty — and prone to false positives — for anything before the
+film era: an "ancient Rome" search's top non-junk result was "Advance on Rome, 1944", a
+real WWII newsreel about the *modern city* of Rome, matching only on the shared word
+"Rome". `mediatype:movies` + a license filter solve legality but not relevance, so a
+word-overlap relevance gate was added on top (`_archive_significant_words`, the same
+bag-of-significant-words approach already used for transition-continuity matching in
+render.py) — and **the gate's first version had a real bug its own test caught**: a
+`>= 0.5` overlap threshold let a single shared word ("rome") through for a 2-word query
+(1 of 2 = exactly 0.5), the *exact* false positive it was built to catch. Fixed to a
+strict majority (`> 0.5`), which correctly requires both words of a 2-word query (or 3
+of 4 for a longer one) to actually match — verified by a test that specifically
+reconstructs the "Advance on Rome" scenario and confirms it's now rejected.
+
+**Verified at multiple levels**: unit tests on the relevance gate (accepts a strong
+match, rejects the real false-positive case, handles no-results) and the derivative-
+file selection (prefers the smaller `_512kb.mp4` transcode over a much larger original,
+falls back to any real `.mp4` if that specific derivative isn't present for a given
+item); one real, unmocked test against the live `archive.org` API (skips rather than
+fails if the network is unreachable, matching how other real-network tests in this
+project stay honest about environment dependence); and a full, real, unmocked
+`_fetch_generic()` call — real search, real relevance-gated match, real 45MB download —
+confirmed via `ffprobe` to be a genuinely valid, playable video, not just a URL that
+happened to resolve. Full suite: 127/127 pass.
+
+**Known, honest trade-off, not fixed here**: Internet Archive items are often full-length
+newsreels/films (the verification's real download was a 439-second, 45MB file for a
+beat that only needs ~3 seconds of it) — render.py's existing `-stream_loop -1 -t
+<duration>` trims what's actually used at render time, so this doesn't break anything,
+but it is a heavier download than Pexels' typically-short clips for the same few seconds
+of usable footage. Not addressed in this pass.

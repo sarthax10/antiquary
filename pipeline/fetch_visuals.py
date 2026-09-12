@@ -26,6 +26,7 @@ Source order:
 """
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -42,6 +43,8 @@ COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 PEXELS_VIDEO_API = "https://api.pexels.com/videos/search"
 PEXELS_PHOTO_API = "https://api.pexels.com/v1/search"
+ARCHIVE_ORG_SEARCH_API = "https://archive.org/advancedsearch.php"
+ARCHIVE_ORG_METADATA_API = "https://archive.org/metadata"
 HEADERS = {"User-Agent": "history-shorts-local-project/0.1 (personal hobby project)"}
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
 
@@ -184,6 +187,86 @@ def _wikidata_portrait(name: str) -> str | None:
             if image:
                 return image
     return None
+
+
+_ARCHIVE_STOPWORDS = frozenset({
+    "a", "an", "the", "of", "in", "at", "on", "and", "to", "with", "his", "her", "their",
+    "its", "for", "from", "by", "as", "is", "was", "were", "are", "this", "that",
+})
+
+
+def _archive_significant_words(text: str) -> set[str]:
+    """Same bag-of-significant-words approach already used for transition-continuity
+    matching (render.py's _subject_key) — reused here for a different purpose:
+    confirming an Internet Archive search RESULT is actually about the query, not just
+    a keyword collision."""
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    return {w for w in words if w not in _ARCHIVE_STOPWORDS and len(w) > 2}
+
+
+def _archive_org_search(query: str) -> str | None:
+    """Internet Archive's public-domain film collections (Prelinger and others) — a
+    real, legally clean source of historical footage (see Claude outputs/OPEN_ISSUES.md
+    #61's sibling item for why this was added over scraping YouTube: even a CC-licensed
+    YouTube video generally can't be downloaded without violating YouTube's own ToS,
+    separate from the footage's own license). Strong for 20th-century subject matter
+    (WWII newsreels, etc. — real film exists); essentially empty for anything before
+    the film era, where a keyword search can still return a false-positive match on a
+    shared word (e.g. "Advance on Rome", a 1944 newsreel, matching a query for "ancient
+    Rome" on the word "Rome" alone) — `mediatype:movies` and a real public-domain
+    license filter handle legality, but NOT relevance, hence the word-overlap check
+    below on top of the API's own relevance ranking.
+
+    Returns an item identifier, or None if nothing both license-clean AND genuinely
+    on-topic was found — callers fall through to the existing Pexels/Commons waterfall
+    exactly as if this source didn't exist, same graceful-degradation pattern as
+    everywhere else in this module."""
+    resp = requests.get(
+        ARCHIVE_ORG_SEARCH_API,
+        headers=HEADERS,
+        params={
+            "q": f"{query} AND mediatype:(movies) AND licenseurl:(*publicdomain*)",
+            "fl[]": ["identifier", "title"],
+            "rows": 5,
+            "output": "json",
+        },
+        timeout=20,
+    )
+    resp.raise_for_status()
+    docs = resp.json().get("response", {}).get("docs", [])
+    query_words = _archive_significant_words(query)
+    if not query_words:
+        return None
+    for doc in docs:
+        title_words = _archive_significant_words(doc.get("title", ""))
+        overlap = query_words & title_words
+        # MORE than half the query's own significant words must show up in the title —
+        # deliberately strict (>) rather than >=: for a typical 2-word query like
+        # "ancient Rome", >= 0.5 would accept a single shared word ("rome") alone,
+        # exactly the "Advance on Rome, 1944" false positive this guards against (a
+        # real bug caught by this module's own test suite, not a hypothetical one).
+        # A strict majority instead requires both words of a 2-word query, or 3 of 4
+        # for a longer one — a real, if still imperfect, relevance bar.
+        if len(overlap) / len(query_words) > 0.5:
+            return doc.get("identifier")
+    return None
+
+
+def _archive_org_video_url(identifier: str) -> str | None:
+    """Prefers a real, reasonably-sized derivative (the "_512kb.mp4" transcode Internet
+    Archive generates for most film-collection items) over the original — often a much
+    larger, higher-bitrate master not worth the download/decode cost for a few seconds
+    of footage in a short-form video. Falls back to any other real .mp4 derivative if
+    the 512kb one isn't present for this particular item."""
+    resp = requests.get(f"{ARCHIVE_ORG_METADATA_API}/{identifier}", headers=HEADERS, timeout=20)
+    resp.raise_for_status()
+    files = resp.json().get("files", [])
+    mp4_files = [f for f in files if (f.get("name") or "").lower().endswith(".mp4")]
+    preferred = next((f for f in mp4_files if "512kb" in f["name"].lower()), None)
+    chosen = preferred or (mp4_files[0] if mp4_files else None)
+    if not chosen:
+        return None
+    return f"https://archive.org/download/{identifier}/{chosen['name']}"
 
 
 def _pexels_video_search(query: str) -> str | None:
@@ -395,6 +478,24 @@ def _fetch_person(query: str, out_base: Path, seed: int, entity_type: str) -> di
 
 
 def _fetch_generic(query: str, out_base: Path, seed: int, entity_type: str) -> dict:
+    # Internet Archive's public-domain film collections tried FIRST, before generic
+    # Pexels stock — real period-appropriate historical footage (when it exists and
+    # passes the relevance gate) belongs in a documentary ahead of generic modern
+    # stock video of the same subject. Falls straight through to the existing waterfall
+    # below on any miss (no match, no license-clean match, no relevant match, or a
+    # network error) — this is purely additive, never a harder failure mode than before.
+    try:
+        archive_id = _archive_org_search(query)
+        archive_url = _archive_org_video_url(archive_id) if archive_id else None
+    except requests.exceptions.RequestException:
+        archive_url = None
+    if archive_url:
+        content = _download(archive_url)
+        if content:
+            path = out_base.with_suffix(".mp4")
+            path.write_bytes(content)
+            return {"path": path, "source": "archive_org", "entity_type": entity_type, "face": None}
+
     try:
         video_url = _pexels_video_search(query)
     except requests.exceptions.RequestException:
