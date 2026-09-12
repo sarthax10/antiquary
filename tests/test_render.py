@@ -174,3 +174,73 @@ def test_render_adds_sfx_on_an_accent_transition(monkeypatch):
     cmd_str = " ".join(captured["cmd"])
     assert "whoosh.mp3" in cmd_str
     assert "adelay" in cmd_str
+
+
+# --- Skin-tone secondary correction (Tier 3 #10) -------------------------------------
+# The filter's own real corrective effect (does it actually reduce a sepia cast, at a
+# modest magnitude) is verified separately against real decoded pixels — see the
+# session's verification script and OPEN_ISSUES.md #58. These tests cover the wiring:
+# who gets it and who doesn't.
+
+def test_render_applies_skin_tone_correction_to_a_person_still_image(monkeypatch):
+    captured = _capture_ffmpeg_cmd(monkeypatch)
+    beats = [{"path": "a.jpg", "entity_type": "person", "face": None, "duration": 3.0, "text": "no year here"}]
+    render.render("narration.mp3", "captions.ass", "out.mp4", beats)
+    cmd_str = " ".join(captured["cmd"])
+    assert render.SKIN_TONE_CORRECTION in cmd_str
+
+
+def test_render_skips_skin_tone_correction_for_non_person_still_image(monkeypatch):
+    captured = _capture_ffmpeg_cmd(monkeypatch)
+    beats = [{"path": "a.jpg", "entity_type": "place", "face": None, "duration": 3.0, "text": "no year here"}]
+    render.render("narration.mp3", "captions.ass", "out.mp4", beats)
+    cmd_str = " ".join(captured["cmd"])
+    assert render.SKIN_TONE_CORRECTION not in cmd_str
+
+
+def test_render_illustrated_style_gives_every_beat_an_overlay(monkeypatch):
+    # Real user report (OPEN_ISSUES.md #59): 3 of 4 beats in an illustrated video showed
+    # nothing but the plain backdrop, since only a year mention triggered any overlay at
+    # all. A beat with no year must still get its own visual_query as a keyword card in
+    # illustrated style.
+    captured = _capture_ffmpeg_cmd(monkeypatch)
+    beats = [{"path": "a.jpg", "entity_type": "event", "face": None, "duration": 3.0,
+              "text": "no year mentioned here", "visual_query": "Victory dance"}]
+    render.render("narration.mp3", "captions.ass", "out.mp4", beats, style="illustrated")
+    cmd_str = " ".join(captured["cmd"])
+    assert "VICTORY DANCE" in cmd_str
+    assert f"fontsize={render.motion_graphics.ILLUSTRATED_FONT_SIZE}" in cmd_str
+
+
+def test_render_photographic_style_does_not_add_keyword_overlay(monkeypatch):
+    # The default style must be completely unaffected by this feature — photographic
+    # mode relies on real imagery, not a graphic, for beats without a year.
+    captured = _capture_ffmpeg_cmd(monkeypatch)
+    beats = [{"path": "a.jpg", "entity_type": "event", "face": None, "duration": 3.0,
+              "text": "no year mentioned here", "visual_query": "Victory dance"}]
+    render.render("narration.mp3", "captions.ass", "out.mp4", beats)  # default style
+    cmd_str = " ".join(captured["cmd"])
+    assert "VICTORY DANCE" not in cmd_str
+
+
+def test_render_keyword_card_does_not_trigger_the_sfx_whoosh(monkeypatch):
+    # Sparing on purpose: illustrated mode's keyword card fires on nearly every beat, so
+    # it must NOT also trigger the accent whoosh (#18) — only a genuine year reveal does.
+    captured = _capture_ffmpeg_cmd(monkeypatch)
+    beats = [{"path": "a.jpg", "entity_type": "event", "face": None, "duration": 3.0,
+              "text": "no year mentioned here", "visual_query": "Victory dance"}]
+    render.render("narration.mp3", "captions.ass", "out.mp4", beats, style="illustrated")
+    cmd_str = " ".join(captured["cmd"])
+    assert "whoosh" not in cmd_str
+
+
+def test_render_skips_skin_tone_correction_for_a_real_video_clip(monkeypatch):
+    # A "person" entity_type whose asset happens to be a video (e.g. illustrated-mode's
+    # synthetic backdrop) must not get skin-tone correction applied — it hits the
+    # VIDEO_EXTS branch, which never carries this correction (see render.py's comment on
+    # why: no real skin-tone content exists to correct there).
+    captured = _capture_ffmpeg_cmd(monkeypatch)
+    beats = [{"path": "a.mp4", "entity_type": "person", "face": None, "duration": 3.0, "text": "no year here"}]
+    render.render("narration.mp3", "captions.ass", "out.mp4", beats)
+    cmd_str = " ".join(captured["cmd"])
+    assert render.SKIN_TONE_CORRECTION not in cmd_str

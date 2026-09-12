@@ -28,7 +28,7 @@ from app.db import get_session  # noqa: E402
 from app.models import Story  # noqa: E402
 
 
-def render_from_timeline(timeline: dict, out_path: str) -> None:
+def render_from_timeline(timeline: dict, out_path: str, visual_style: str = "photographic") -> None:
     """Downloads every clip a timeline's visual/narration tracks point at, rebuilds the
     concatenated narration track and the karaoke .ass from the timeline's own data (not
     re-transcribed — the caption track's stored word timestamps are the source of truth),
@@ -62,6 +62,7 @@ def render_from_timeline(timeline: dict, out_path: str) -> None:
                 "face": visual.get("face"),
                 "duration": audio["duration"],
                 "text": audio.get("text", ""),
+                "visual_query": visual.get("visual_query", ""),
             })
 
         narration_path = tmp_dir / "narration.mp3"
@@ -72,7 +73,7 @@ def render_from_timeline(timeline: dict, out_path: str) -> None:
         ass_path = tmp_dir / "captions.ass"
         captions.build_ass_from_track(tracks.get("captions") or [], font, str(ass_path))
 
-        render.render(str(narration_path), str(ass_path), out_path, beats_final, font=font)
+        render.render(str(narration_path), str(ass_path), out_path, beats_final, font=font, style=visual_style)
 
 
 def render_story(story_id: str) -> str:
@@ -90,7 +91,7 @@ def render_story(story_id: str) -> str:
 
     with tempfile.TemporaryDirectory(prefix="antiquary_render_out_") as tmp:
         out_path = str(Path(tmp) / "final.mp4")
-        render_from_timeline(story.timeline, out_path)
+        render_from_timeline(story.timeline, out_path, visual_style=story.visual_style)
         storage.upload_video(out_path, story.video_object_key)
     return story.id
 

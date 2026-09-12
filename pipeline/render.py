@@ -73,6 +73,37 @@ _ACCENT_TRANSITIONS = ("circleopen", "radial")
 # frame-to-frame flicker on real video clips (irrelevant for a still, harmless either way).
 CLIP_NORMALIZE = "normalize=independence=0:strength=0.6:smoothing=20"
 
+# Secondary, skin-tone-targeted correction — distinct from CLIP_NORMALIZE above, which
+# stretches RGB *levels* globally and can't fix a hue-specific cast (see
+# PROFESSIONAL_QUALITY_ROADMAP.md §7 Tier 3 #10). Old Wikidata/Commons portrait scans
+# (aged paper, period photochemistry, lossy digitization) commonly carry a yellow/sepia
+# cast — excess red+green relative to blue — that sits specifically in the range of
+# luminosities real skin tones occupy, which spans midtones through highlights (a
+# forehead highlight reads brighter than a cheek in shadow). `colorbalance`'s tonal-range
+# controls were chosen over `selectivecolor`'s hue-range buckets after real testing
+# showed selectivecolor's fuzzy hue/luminosity membership barely touched a bright,
+# already fairly-neutral skin tone (~1-2/255 shift) — too weak to call a real
+# correction. colorbalance's own per-range weighting turned out to matter too: applying
+# only to midtones (rm/gm/bm) had *zero* effect on a bright, highlight-range skin tone
+# (confirmed directly) — real skin pixels commonly sit there, not at true midtone
+# luminosity — so both midtones and highlights get the same small nudge, confirmed by
+# testing against skin tones at two different real luminosity levels (see
+# tests/test_render.py). Small magnitude throughout (correction, not a stylizing grade),
+# matching CLIP_NORMALIZE's own "partial, not full" philosophy. Only applied to
+# "person" beats' own still images (paintings/photos/busts) — never to a real video
+# clip (person beats never source real video, only Wikidata/Commons/placeholder — see
+# fetch_visuals._fetch_person) and never to illustrated-mode's synthetic backdrops
+# (which have no skin-tone content to correct at all).
+#
+# Honest limit, stated plainly: this is a real, verified corrective mechanism (mechanism
+# and direction confirmed against real, decoded pixel output — see OPEN_ISSUES.md #58),
+# not a creatively "tuned" result — confirming it looks right across many real, wildly
+# different historical portrait sources (a 1600s oil painting vs. a 1920s photograph vs.
+# a modern museum scan) is inherently a human visual-judgment task the roadmap itself
+# flagged as needing "real tuning/testing," not something a single automated pass can
+# claim to have finished.
+SKIN_TONE_CORRECTION = "colorbalance=rm=-0.08:gm=-0.03:bm=0.08:rh=-0.08:gh=-0.03:bh=0.08"
+
 # Target integrated loudness for the final mix — matches YouTube's own normalization
 # target (see PROFESSIONAL_QUALITY_ROADMAP.md §1.5/§7 Tier 2 #8), so a video isn't
 # perceptibly re-adjusted (and its dynamics further squashed) by the platform on top of
@@ -269,11 +300,21 @@ def music_available() -> bool:
     return bool(_music_tracks())
 
 
-def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict], font: dict | None = None) -> None:
+def render(
+    audio_path: str, ass_path: str, out_path: str, beats: list[dict],
+    font: dict | None = None, style: str = "photographic",
+) -> None:
     """`font` is an optional captions.py-style font dict (see captions.CAPTION_FONTS) —
     when given, the timeline-marker motion graphic is set in the same face as this
     video's own captions instead of always defaulting to Anton (see
-    motion_graphics.font_path_for() and OPEN_ISSUES.md audit #33)."""
+    motion_graphics.font_path_for() and OPEN_ISSUES.md audit #33).
+
+    `style`: "photographic" (default, unchanged behavior) or "illustrated" — in
+    illustrated mode, a beat with no year-callout still gets a motion-graphic keyword
+    card (see motion_graphics.beat_keyword_label) instead of nothing but the plain
+    animated backdrop. See OPEN_ISSUES.md #59: a real production run showed 3 of 4
+    beats in an illustrated video with no motion-graphic content at all, since
+    extract_year_label's trigger is narrow by design and most beats don't name a year."""
     total_duration = get_audio_duration(audio_path)
     font_path = motion_graphics.font_path_for(font)
     beats = _cap_beats(beats, MAX_CLIPS)
@@ -343,17 +384,21 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict], fon
             px, py = (face[0], face[1]) if face else (0.5, 0.5)
             frames = max(1, round(requested[i] * FPS))
             z, x, y = _zoompan_expr(px, py, zoom_in=(i % 2 == 0), index=i, frames=frames)
-            # CLIP_NORMALIZE runs BEFORE scale=8000 (not after, where it was first
-            # wired), and that ordering is load-bearing, not cosmetic: applying it on the
-            # post-upscale ~8000x14222px intermediate frame (the source's native
-            # resolution upscaled 8000px wide before zoompan crops back down) made a
-            # single ~2s clip balloon to 6.5GB+ RSS and effectively hang — confirmed by
-            # isolated testing (memory stayed flat applying it pre-upscale on the small
-            # source image instead, identical visual result). Not documented behavior
-            # anyone would guess; found by watching real memory usage during a render
-            # that was mysteriously getting SIGKILLed, not by reading the filter docs.
+            # CLIP_NORMALIZE (and SKIN_TONE_CORRECTION, when it applies) run BEFORE
+            # scale=8000 (not after, where CLIP_NORMALIZE was first wired), and that
+            # ordering is load-bearing, not cosmetic: applying either on the post-upscale
+            # ~8000x14222px intermediate frame (the source's native resolution upscaled
+            # 8000px wide before zoompan crops back down) made a single ~2s clip balloon
+            # to 6.5GB+ RSS and effectively hang — confirmed by isolated testing (memory
+            # stayed flat applying it pre-upscale on the small source image instead,
+            # identical visual result). Not documented behavior anyone would guess; found
+            # by watching real memory usage during a render that was mysteriously
+            # getting SIGKILLed, not by reading the filter docs.
+            correction = CLIP_NORMALIZE
+            if beat.get("entity_type") == "person":
+                correction = f"{CLIP_NORMALIZE},{SKIN_TONE_CORRECTION}"
             filter_parts.append(
-                f"[{i}:v:0]{CLIP_NORMALIZE},scale=8000:-1,"
+                f"[{i}:v:0]{correction},scale=8000:-1,"
                 f"zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS},"
                 f"format=yuv420p[v{i}]"
             )
@@ -361,15 +406,32 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict], fon
         # A beat whose narration names a specific year gets an animated timeline-marker
         # graphic over its first ~2s — see motion_graphics.py for why this is a distinct
         # feature from the pan/zoom/transition treatment above, not more of the same.
+        # In illustrated mode specifically, a beat with no year still gets SOME
+        # motion-graphic content — its own visual_query as a smaller keyword card —
+        # instead of nothing but the plain animated backdrop (see #59: a real production
+        # run showed 3 of 4 beats with no motion graphic at all, since most beats don't
+        # name a year). Photographic mode is unaffected: it relies on real imagery, not
+        # a graphic, for beats without a year.
         year_label = motion_graphics.extract_year_label(beat.get("text", ""))
-        if year_label:
+        overlay_label = year_label
+        overlay_fontsize = motion_graphics.FONT_SIZE
+        if not overlay_label and style == "illustrated":
+            overlay_label = motion_graphics.beat_keyword_label(beat)
+            overlay_fontsize = motion_graphics.ILLUSTRATED_FONT_SIZE
+        if overlay_label:
             overlay = motion_graphics.timeline_overlay_filter(
-                year_label, requested[i], f"v{i}", f"v{i}o", font_path=font_path
+                overlay_label, requested[i], f"v{i}", f"v{i}o",
+                font_path=font_path, fontsize=overlay_fontsize,
             )
             if overlay:
                 filter_parts.append(overlay)
                 labels[i] = f"v{i}o"
-                sfx_cues.append(beat_start[i] + 0.1)
+                # Sparing on purpose (see #18): only a genuine year reveal gets the
+                # whoosh accent. Illustrated mode's keyword card fires on nearly every
+                # beat, and a whoosh on every single beat would violate "never on every
+                # cut" — the whole reason the sfx cue collection exists to be selective.
+                if year_label:
+                    sfx_cues.append(beat_start[i] + 0.1)
 
     prev_label = labels[0]
     for i in range(1, n):

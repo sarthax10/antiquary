@@ -39,6 +39,44 @@ def test_extract_year_label_empty_text():
     assert mg.extract_year_label(None) is None
 
 
+# --- Illustrated-mode keyword card (see OPEN_ISSUES.md #59) -------------------------
+# A real user report: an illustrated-style video's beats that don't name a year showed
+# NOTHING but the plain animated backdrop (extract_year_label's trigger is narrow by
+# design). beat_keyword_label gives every beat a fallback label sourced from its own
+# visual_query, reusing timeline_overlay_filter's already-verified mechanism.
+
+def test_beat_keyword_label_uppercases_the_visual_query():
+    assert mg.beat_keyword_label({"visual_query": "British army officers"}) == "BRITISH ARMY OFFICERS"
+
+
+def test_beat_keyword_label_truncates_long_queries_with_ellipsis():
+    long_query = "A very long descriptive visual search phrase indeed"
+    label = mg.beat_keyword_label({"visual_query": long_query})
+    assert len(label) <= mg.ILLUSTRATED_LABEL_MAX_CHARS
+    assert label.endswith("…")
+
+
+def test_beat_keyword_label_none_when_no_visual_query():
+    assert mg.beat_keyword_label({"visual_query": ""}) is None
+    assert mg.beat_keyword_label({}) is None
+
+
+def test_timeline_overlay_filter_accepts_a_smaller_fontsize_for_keyword_cards():
+    result = mg.timeline_overlay_filter(
+        "BRITISH ARMY OFFICERS", 3.0, "v0", "v0o", fontsize=mg.ILLUSTRATED_FONT_SIZE
+    )
+    assert result is not None
+    assert f"fontsize={mg.ILLUSTRATED_FONT_SIZE}" in result
+    assert f"fontsize={mg.FONT_SIZE}" not in result
+
+
+def test_timeline_overlay_filter_default_fontsize_is_unchanged():
+    # Regression guard: existing year-callout call sites (no fontsize passed) must keep
+    # using the original FONT_SIZE exactly as before this parameter was added.
+    result = mg.timeline_overlay_filter("1872", 3.0, "v0", "v0o")
+    assert f"fontsize={mg.FONT_SIZE}" in result
+
+
 def test_timeline_overlay_filter_skips_too_short_beat():
     # MIN_SHOW is 1.5s and TAIL_MARGIN is 0.3s, so anything under 1.8s can't fit.
     assert mg.timeline_overlay_filter("1872", 1.0, "v0", "v0o") is None

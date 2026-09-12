@@ -1301,3 +1301,101 @@ confirmed via direct `psql` against the real `generation_jobs` table that the ne
 actually persisted `visual_style='illustrated'` (and that older rows correctly backfilled
 to `'photographic'`), then cancelled the job cleanly. Full backend suite: 95/95 pass.
 Frontend production build succeeds clean.
+
+## 58. Skin-tone-aware secondary color correction on portrait beats (Tier 3 #10)
+
+**Status: VERIFIED — mechanism confirmed; broad creative tuning stays a human task**
+
+`render.py`'s `SKIN_TONE_CORRECTION` (`colorbalance=rm=-0.08:gm=-0.03:bm=0.08:rh=-0.08:
+gh=-0.03:bh=0.08`) applies to a "person" beat's own still image, right after
+`CLIP_NORMALIZE` and before the `scale=8000:-1` upscale (same memory-safety ordering
+that fix required) — a small, corrective nudge counteracting the yellow/sepia cast
+common on aged Wikidata/Commons portrait scans, distinct from `CLIP_NORMALIZE`'s global
+RGB-level stretch (which can't fix a hue-specific cast). Never applied to a real video
+clip (person beats never source real video — only Wikidata/Commons/placeholder) or to
+illustrated-mode's synthetic backdrops (no skin-tone content to correct).
+
+**A real dead-end worth recording**: the first attempt used `selectivecolor`'s
+reds/yellows hue-range buckets, which turned out to barely touch a bright, already
+fairly-neutral test skin tone (~1-2/255 shift — confirmed by decoding real pixel
+output) — too weak to call a correction. Switched to `colorbalance`'s tonal-range
+model, which then ALSO measured as a complete no-op when targeting only midtones
+(`rm/gm/bm`) — the test skin tone's actual luminosity sat in the highlight range, not
+midtone, and `colorbalance`'s per-range weighting means an out-of-range pixel gets
+essentially zero effect. Fixed by applying the same nudge to both midtones AND
+highlights, since real skin spans that whole range (a forehead highlight vs. a cheek in
+shadow). Confirmed at two different real luminosity levels via decoded pixel output: a
+~30-45% reduction in a "yellowness" proxy ((R+G)/2 - B) at both levels, with a bounded,
+modest per-channel shift (max ~16/255) — a real, working correction, not a coincidence
+of one lucky test value. Also confirmed it survives the FULL render pipeline (grade,
+vignette, grain, zoompan all included), not just the isolated filter: the same
+sepia-cast source image rendered once as a "person" beat and once as a "place" beat
+showed a measurably reduced cast only on the person version.
+
+**Honest limit, stated per this project's own epistemic discipline**: this is a
+verified corrective *mechanism* — it measurably does what it's designed to do, in the
+right direction, at a modest magnitude. Whether it looks *right* across many real,
+wildly different historical portrait sources (an oil painting vs. a period photograph
+vs. a modern museum scan) is inherently a human visual-judgment call the roadmap itself
+flagged as needing "real tuning/testing" — not something a single automated pass can
+claim to have finished, the same way `needs_human_review: false` was never claimed as
+ground truth for fact-checking. 3 new unit tests (`tests/test_render.py`) cover the
+wiring (person-still-image only, never video/non-person). Full suite: 98/98 pass.
+
+## 59. Illustrated mode: only a year-mentioning beat got any motion graphic — real production bug, found and fixed same day
+
+**Status: VERIFIED FIXED — reported by the user against a real illustrated-style video within hours of #57 shipping**
+
+The user generated "The First Football Match Wasn't About the Beautiful Game" in
+illustrated style and reported it back almost immediately: *"Generated an illustration
+only video, but it gave me blank background. Not actual animations and illustrations.,
+no explainers. Just blank gradient bg."* Pulled the real story's beats from the DB
+(`stories.id = 02c7869e136f`) to investigate rather than guessing: 4 beats, only beat 0's
+narration names a year ("In 1863..."), and `render.py`'s only mechanism for adding any
+motion-graphic content to an illustrated-mode beat was `extract_year_label` — a narrow,
+deliberately-specific trigger (see #2) that was never meant to be the *only* source of
+per-beat visual interest, but with nothing else built yet, that's exactly what it became
+for illustrated mode. Net result for this real video: beat 0 got the year callout; beats
+1, 2, 3 ("Victory dance", "Martial display", "WWI trenches" — real, on-topic phrases the
+writer model already produced) got nothing but the plain drifting-gradient backdrop and
+regular captions. The user's "blank gradient, no explainers" description was accurate,
+not a misunderstanding of what illustrated mode does.
+
+**Fix**: `motion_graphics.beat_keyword_label(beat)` derives a fallback label from the
+beat's own `visual_query` (uppercased, truncated with an ellipsis past
+`ILLUSTRATED_LABEL_MAX_CHARS=24` so an arbitrary phrase can't overflow the frame) —
+reusing `timeline_overlay_filter()`'s already-verified entrance/hold/exit mechanism
+rather than building a new one, via a new `fontsize` parameter (smaller,
+`ILLUSTRATED_FONT_SIZE=56`, since a phrase is longer than a year) that also correctly
+recomputes the underline's vertical offset for the new size instead of relying on the
+module constant sized for the default. `render()` gained a `style` parameter: in
+`"illustrated"` mode, any beat with no year gets the keyword-card fallback instead of
+nothing; `"photographic"` mode (the default) is completely unaffected. Threaded through
+every real call site: `run_pipeline.py` (added `visual_query` to `beats_final`, passes
+`style=visual_style`), `render_timeline.py` (same, plus reads `story.visual_style` for
+the editor re-render path). Deliberately did NOT also trigger the sfx whoosh (#18) on
+every keyword card — only a genuine year reveal does, since the keyword card now fires
+on nearly every beat and stacking a whoosh onto every single one would violate "never on
+every cut," the whole reason that cue collection is selective.
+
+**Verified, not assumed**: a real end-to-end reproduction using this exact story's 4
+real beats, rendered in illustrated style — decoded frames from within each beat's own
+overlay window and confirmed real drawtext/drawbox content (local pixel variance 31-42,
+vs. a near-zero-variance smooth gradient before the fix) at all 4 beats, not just beat 0.
+9 new unit tests across `tests/test_motion_graphics.py` (label derivation, truncation,
+fontsize wiring, a regression guard that the default year-callout fontsize is
+unchanged) and `tests/test_render.py` (illustrated style adds the keyword overlay,
+photographic style doesn't, the keyword card never triggers the sfx whoosh). Full
+suite: 106/106 pass. The already-rendered story from the user's original report predates
+this fix and won't retroactively change — a fresh illustrated-style generation is needed
+to see it.
+
+**Also noticed in passing, not yet investigated**: a `sqlalchemy.orm.exc.StaleDataError`
+("UPDATE statement on table 'generation_jobs' expected to update 1 row(s); 0 were
+matched") in the app container's logs around the time of a restart during this session's
+testing — the job it was for (`id=460`, this exact story) still completed successfully
+(`status=done`, no error recorded), so this didn't cause user-visible harm here, but it's
+a real error worth a real look: likely a race in `job_manager._watch()`'s finalization
+UPDATE against something else touching the same row concurrently (a restart-induced
+version, or a second finalization path). Flagging rather than diagnosing now, since the
+same-day priority was the illustrated-mode content gap the user was actively blocked on.

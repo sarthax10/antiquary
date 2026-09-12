@@ -169,10 +169,11 @@ def run(topic: str, visual_style: str = "photographic") -> str:
                 "face": asset["face"],
                 "duration": audio["duration"],
                 "text": audio["text"],
+                "visual_query": audio.get("visual_query", ""),
             }
             for asset, audio in zip(assets, beat_audio)
         ]
-        render.render(str(narration_path), str(ass_path), str(video_path), beats_final, font=font)
+        render.render(str(narration_path), str(ass_path), str(video_path), beats_final, font=font, style=visual_style)
 
         story_timeline = timeline_module.build_timeline(
             beats=beats,

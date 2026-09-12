@@ -66,6 +66,13 @@ def font_path_for(font: dict | None) -> str:
     return FONT_PATH
 
 TEXT_X, TEXT_Y, FONT_SIZE = 96, 220, 84
+
+# Illustrated-mode's per-beat keyword card (see beat_keyword_label()/render.py's use of
+# it) reuses this same overlay mechanism with a smaller font and a truncated label,
+# since an arbitrary visual_query phrase ("British army officers") is much longer than
+# a year ("1863"/"44 BCE") and would risk overflowing the frame at FONT_SIZE.
+ILLUSTRATED_FONT_SIZE = 56
+ILLUSTRATED_LABEL_MAX_CHARS = 24
 BOX_BORDER = 20  # padding between the text glyph and the tight-fitting box edge
 
 UNDERLINE_X_OFFSET = 4          # relative to TEXT_X, so it sits under the text's left edge
@@ -93,6 +100,27 @@ def extract_year_label(text: str) -> str | None:
         return f"{m.group(1)} {m.group(2).upper()}"
     m = _BARE_YEAR_RE.search(text)
     return m.group(1) if m else None
+
+
+def beat_keyword_label(beat: dict) -> str | None:
+    """A short, presentable phrase for illustrated-mode's per-beat keyword card (see
+    render.py) — every beat gets SOME motion-graphic content in illustrated mode, not
+    only the ones whose narration happens to name a year (see Claude outputs/
+    OPEN_ISSUES.md #56/#59: a real user report that 3 of 4 beats in an illustrated video
+    showed nothing but the plain backdrop, since only extract_year_label's narrow
+    trigger fired anything at all). Sourced from the beat's own `visual_query` — already
+    a short, on-topic phrase the writer model produced for sourcing (see
+    generate_script.py), which makes it a natural label here too, not a new derived
+    concept. Uppercased to read as a title card rather than a caption fragment, and
+    truncated (with an ellipsis) since an arbitrary phrase can be much longer than a
+    year and would otherwise risk overflowing the frame at any reasonable font size."""
+    query = (beat.get("visual_query") or "").strip()
+    if not query:
+        return None
+    label = query.upper()
+    if len(label) > ILLUSTRATED_LABEL_MAX_CHARS:
+        label = label[: ILLUSTRATED_LABEL_MAX_CHARS - 1].rstrip() + "…"
+    return label
 
 
 def _ease_out_cubic(x_expr: str) -> str:
@@ -185,18 +213,23 @@ def _underline_width_segments(
 
 
 def timeline_overlay_filter(
-    label: str, beat_duration: float, in_label: str, out_label: str, font_path: str | None = None
+    label: str, beat_duration: float, in_label: str, out_label: str,
+    font_path: str | None = None, fontsize: int = FONT_SIZE,
 ) -> str | None:
     """A drawtext+drawbox filter chain fragment (`[in_label] ... [out_label]`, both
-    already-scaled 1080x1920 video streams) animating a year callout with a coordinated
-    ease-in/hold/ease-out — entrance and exit mirror each other rather than the graphic
-    just appearing and later being cut off. Returns None if the beat is too short for a
-    full entrance+hold+exit to read as intentional rather than jarring."""
+    already-scaled 1080x1920 video streams) animating a year callout (or, via
+    `fontsize`, illustrated-mode's per-beat keyword card — see beat_keyword_label) with
+    a coordinated ease-in/hold/ease-out — entrance and exit mirror each other rather
+    than the graphic just appearing and later being cut off. Returns None if the beat is
+    too short for a full entrance+hold+exit to read as intentional rather than jarring."""
     show_until = min(MAX_SHOW, beat_duration - TAIL_MARGIN)
     if show_until < MIN_SHOW:
         return None
     exit_start = show_until - EXIT_DURATION
     resolved_font_path = font_path or FONT_PATH
+    underline_y_offset = fontsize + BOX_BORDER + 14  # see UNDERLINE_Y_OFFSET's own
+    # comment — recomputed here (not read from the module constant) so a non-default
+    # fontsize still gets a correctly-spaced underline instead of one sized for FONT_SIZE.
 
     escaped = label.replace("'", "").replace(":", "").replace("\\", "")
 
@@ -220,7 +253,7 @@ def timeline_overlay_filter(
     # time-varying w= expression (the latter silently doesn't work — drawbox's own `t`
     # option, not elapsed time, wins inside its w=/h=/x=/y= expressions).
     underline_x = TEXT_X + UNDERLINE_X_OFFSET
-    underline_y = TEXT_Y + UNDERLINE_Y_OFFSET
+    underline_y = TEXT_Y + underline_y_offset
     width_segments = _underline_width_segments(ENTRY_DURATION, exit_start, EXIT_DURATION, UNDERLINE_W_MAX)
     underline_filters = ",".join(
         f"drawbox=x={underline_x}:y='{underline_y}':w={w:.2f}:h={UNDERLINE_H}:"
@@ -243,7 +276,7 @@ def timeline_overlay_filter(
     return (
         f"[{in_label}]"
         f"{underline_filters},"
-        f"drawtext=text='{escaped}':fontfile={resolved_font_path}:fontsize={FONT_SIZE}:fontcolor=white:"
+        f"drawtext=text='{escaped}':fontfile={resolved_font_path}:fontsize={fontsize}:fontcolor=white:"
         f"x={TEXT_X}:y='{text_y}':box=1:boxcolor=black@0.45:boxborderw={BOX_BORDER}:"
         f"alpha='{text_alpha}':enable='{enable}'"
         f"[{out_label}]"
