@@ -1725,3 +1725,57 @@ five separate copies of the same logic.
 
 Full suite: 139/140 pass (1 skip — the real Europeana query with no qualifying result
 at test-run time, by design not a failure).
+
+---
+
+## 65. FilmPlan schema (Milestone 1) + Editorial Timeline refactor (Milestone 2)
+
+**Status: VERIFIED**
+
+The first two milestones of `Claude outputs/FILM_PLAN_ARCHITECTURE.md`'s redesign,
+implemented and verified against the real local stack. Both are pure internal-
+architecture groundwork — **neither changes anything about what a generated video
+actually looks like today**. Nothing yet calls the new code from `run_pipeline.py`.
+
+**Milestone 1 — FilmPlan schema (`pipeline/film_plan.py`, new).** The versioned
+`FilmPlan`/`Scene`/`Shot`/`TypographyCue` dataclasses from the architecture doc's
+Section D, plus `from_beats_v0()`/`to_beats_v0()`/`to_beats_final()` — lossless
+projections to/from the REAL current shapes: `Story.beats` (confirmed via
+`enqueue_story.py` to be only `text`/`visual_query`/`entity_type`) and
+`run_pipeline.py`'s `beats_final` (7 fields). `Story.film_plan`/`Story.qc_report` JSONB
+columns added (migration `7b2e94a1c6d8`, additive/nullable, verified via a real
+upgrade/downgrade/upgrade round-trip against the real local Postgres) — unpopulated by
+any code today, just somewhere to write to once something does.
+`tests/test_film_plan.py` (15 tests) includes the load-bearing
+`test_from_beats_v0_round_trips_real_stories_from_the_real_database`, which pulls 5 real
+`Story.beats` rows from the real database and confirms the round-trip is byte-identical
+against actual production data, not just synthesized examples.
+
+**Milestone 2 — Editorial Timeline refactor (`pipeline/render.py`).** `render()`'s
+monolithic body (every Ken Burns/transition/motion-graphic/sfx/music/loudness decision,
+interleaved with ffmpeg-command assembly, in one function) is split into
+`build_timeline()` (all of that editorial decision-making, returning a new `Timeline`
+dataclass) and `compile_ffmpeg()` (pure mechanical `Timeline` → ffmpeg argv, no
+judgment calls). `render()` itself is now a 3-line wrapper: `build_timeline()` then
+`compile_ffmpeg()` then `subprocess.run()`. This is the seam a later automated-QC pass
+(Milestone 7) needs — inspecting what was *decided* without re-parsing ffmpeg strings.
+
+Verified byte-identical to the actual pre-refactor `render()` (loaded fresh from the
+last git commit via `importlib`) across 3 real, varied beat sets (mixed photo/video +
+person/place/event entity types + framing hints + a year-mention sfx cue; illustrated
+style; a custom-font single beat) — real synthetic media, real `ffprobe` calls, only the
+final ffmpeg invocation faked to capture the command. First run of this check surfaced a
+real **test-harness bug, not a refactor bug**: loading the old `render.py` from `/tmp/`
+made its `MUSIC_DIR`/`SFX_DIR` constants (`Path(__file__).resolve().parent / "assets"`)
+resolve to a nonexistent `/tmp/assets`, so the old module silently found zero music/sfx
+tracks while the new one (loaded from its real path) found real ones — a false mismatch
+from where the verification script put the file, not from the refactor. Fixed by loading
+the old module from inside `pipeline/` instead, and seeding `random.seed()` identically
+before each call (`_pick_music()`'s `random.choice()` among same-mood tracks is real
+product nondeterminism, not something this check should trip on). Once fixed: byte-
+identical across all 3 cases. That one-time git-diff proof is now a permanent test,
+`tests/test_render.py::test_build_timeline_plus_compile_ffmpeg_matches_pre_refactor_render`
+(no git archaeology — it just asserts `render()`'s produced command equals
+`build_timeline()`+`compile_ffmpeg()` called directly with the same inputs).
+
+Full suite: 155 passed, 1 skipped (same pre-existing Europeana skip).

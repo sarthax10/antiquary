@@ -286,3 +286,53 @@ def test_render_skips_skin_tone_correction_for_a_real_video_clip(monkeypatch):
     render.render("narration.mp3", "captions.ass", "out.mp4", beats)
     cmd_str = " ".join(captured["cmd"])
     assert render.SKIN_TONE_CORRECTION not in cmd_str
+
+
+# --- Editorial Timeline refactor (FILM_PLAN_ARCHITECTURE.md Milestone 2) ------------
+# render() used to decide every editorial detail (transitions, Ken Burns framing, motion
+# graphics, sfx/music mixing, loudness) AND assemble the ffmpeg command in the same
+# function body. build_timeline() now makes every one of those decisions and returns
+# them as a Timeline; compile_ffmpeg() is a pure mechanical translation of a Timeline
+# into a real ffmpeg argv; render() is just "run build_timeline() then compile_ffmpeg()
+# then subprocess.run()". This test proves that split by calling all three paths against
+# the same real, varied beat sets and asserting the ffmpeg command is byte-identical no
+# matter which path produced it — a one-time git-history diff against the actual
+# pre-refactor render() already confirmed this same invariant during the refactor itself
+# (see Claude outputs/OPEN_ISSUES.md); this is the permanent version of that check.
+
+def test_build_timeline_plus_compile_ffmpeg_matches_pre_refactor_render(monkeypatch):
+    test_cases = [
+        ("mixed_3beat", [
+            {"path": "a.jpg", "entity_type": "person", "face": [0.5, 0.3], "duration": 3.0,
+             "text": "Napoleon Bonaparte planned his next move.", "visual_query": "Napoleon Bonaparte",
+             "framing": "push_in"},
+            {"path": "b.jpg", "entity_type": "place", "face": None, "duration": 3.0,
+             "text": "The battlefield stretched for miles in 1815.", "visual_query": "Waterloo battlefield",
+             "framing": "pan"},
+            {"path": "c.mp4", "entity_type": "event", "face": None, "duration": 3.0,
+             "text": "The conflict changed Europe forever.", "visual_query": "European conflict",
+             "framing": "hold_static"},
+        ], None, "photographic"),
+        ("illustrated_2beat", [
+            {"path": "a.jpg", "entity_type": "person", "face": None, "duration": 4.0,
+             "text": "A general made a choice.", "visual_query": "Roman general portrait"},
+            {"path": "b.jpg", "entity_type": "place", "face": None, "duration": 4.0,
+             "text": "The senate chamber stood empty.", "visual_query": "Roman senate chamber"},
+        ], None, "illustrated"),
+        ("single_beat_with_font", [
+            {"path": "a.jpg", "entity_type": "scene", "face": None, "duration": 5.0,
+             "text": "Nobody expected what came next.", "visual_query": "a quiet street"},
+        ], {"name": "Bebas Neue", "size": 86, "uppercase": True, "avg_char_w": 38}, "photographic"),
+    ]
+
+    for name, beats, font, style in test_cases:
+        captured = _capture_ffmpeg_cmd(monkeypatch)
+        render.render("narration.mp3", "captions.ass", "out.mp4", [dict(b) for b in beats], font=font, style=style)
+        cmd_via_render = captured["cmd"]
+
+        _capture_ffmpeg_cmd(monkeypatch)  # re-fake ffprobe; this path issues no final-cmd subprocess.run
+        timeline = render.build_timeline("narration.mp3", "captions.ass", [dict(b) for b in beats],
+                                          font=font, style=style)
+        cmd_via_split = render.compile_ffmpeg(timeline, "out.mp4")
+
+        assert cmd_via_split == cmd_via_render, f"[{name}] build_timeline()+compile_ffmpeg() diverged from render()"

@@ -48,6 +48,18 @@ class Story(Base):
     # transient GenerationJob row) so a future editor re-render stays visually consistent
     # with how the video was originally generated.
     visual_style = Column(String(20), nullable=False, default="photographic")
+    # The FilmPlan this story was (or, for anything rendered before this column
+    # existed, WOULD project to) built from — see pipeline/film_plan.py and Claude
+    # outputs/FILM_PLAN_ARCHITECTURE.md Milestone 1. Nullable: not yet populated by the
+    # real generation pipeline (that's a later milestone), so this column exists ahead
+    # of anything writing to it — reading it for an older/not-yet-migrated story should
+    # fall back to `pipeline.film_plan.from_beats_v0(story.beats)`, never assume it's
+    # present.
+    film_plan = Column(JSONB, nullable=True)
+    # Findings from the automated QC pass (Milestone 7) — real, computed dimension
+    # scores and violation findings, never hand-typed numbers. Nullable for the exact
+    # same not-yet-populated reason as film_plan above.
+    qc_report = Column(JSONB, nullable=True)
     duration_seconds = Column(Float, nullable=True)
     video_object_key = Column(String(300), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

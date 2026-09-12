@@ -29,6 +29,7 @@ import random
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import motion_graphics
@@ -339,11 +340,38 @@ def music_available() -> bool:
     return bool(_music_tracks())
 
 
-def render(
-    audio_path: str, ass_path: str, out_path: str, beats: list[dict],
+@dataclass
+class Timeline:
+    """The declarative output of build_timeline() — every editorial decision already
+    made (transitions, Ken Burns framing, motion-graphic overlays, sfx cues, music,
+    loudness) expressed as ffmpeg inputs + filter-graph fragments, with no editorial
+    judgment left for compile_ffmpeg() to make. See Claude outputs/
+    FILM_PLAN_ARCHITECTURE.md Milestone 2 — before this split, the same code that
+    decided *what* to render also built the ffmpeg command string deciding *how*, in
+    the same loop, at the same time; this dataclass is the seam between the two that
+    didn't exist before, and is what makes a later automated-QC pass (Milestone 7)
+    able to inspect what render() actually decided instead of only pixels after the
+    fact."""
+    cmd_inputs: list[str]
+    filter_parts: list[str]
+    video_map: str
+    audio_map: str
+
+
+def build_timeline(
+    audio_path: str, ass_path: str, beats: list[dict],
     font: dict | None = None, style: str = "photographic",
-) -> None:
-    """`font` is an optional captions.py-style font dict (see captions.CAPTION_FONTS) —
+) -> Timeline:
+    """Every editorial decision this pipeline makes about a video — transition style,
+    Ken Burns framing, which motion graphic fires and when, sfx cue placement, music
+    mood/mixing, final loudness — expressed as a Timeline, with zero ffmpeg-command
+    assembly left to do afterward (see compile_ffmpeg()). This is exactly render()'s
+    own pre-Milestone-2 body, moved here unchanged: see FILM_PLAN_ARCHITECTURE.md's
+    Milestone 2 and its own byte-identical-output test
+    (tests/test_render.py::test_build_timeline_plus_compile_ffmpeg_matches_pre_refactor_render)
+    for why this split is trusted not to have changed behavior.
+
+    `font` is an optional captions.py-style font dict (see captions.CAPTION_FONTS) —
     when given, the timeline-marker motion graphic is set in the same face as this
     video's own captions instead of always defaulting to Anton (see
     motion_graphics.font_path_for() and OPEN_ISSUES.md audit #33).
@@ -567,16 +595,37 @@ def render(
     audio_map = "[loud]"
     filter_parts.append(f"{loud_in}{LOUDNORM}[loud]")
 
-    filter_complex = ";".join(filter_parts)
+    return Timeline(cmd_inputs=cmd, filter_parts=filter_parts, video_map="[vout]", audio_map=audio_map)
 
-    cmd += [
+
+def compile_ffmpeg(timeline: Timeline, out_path: str) -> list[str]:
+    """Pure mechanical translation from a Timeline to a real ffmpeg command line — no
+    editorial judgment happens here, only in build_timeline() above. Exactly what
+    render()'s own tail end did before Milestone 2, just reading from a Timeline
+    object instead of two loose local variables (`cmd`/`filter_parts`) that only
+    existed inside render()'s own stack frame."""
+    filter_complex = ";".join(timeline.filter_parts)
+    return timeline.cmd_inputs + [
         "-filter_complex", filter_complex,
-        "-map", "[vout]", "-map", audio_map,
+        "-map", timeline.video_map, "-map", timeline.audio_map,
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
         out_path,
     ]
+
+
+def render(
+    audio_path: str, ass_path: str, out_path: str, beats: list[dict],
+    font: dict | None = None, style: str = "photographic",
+) -> None:
+    """As of Milestone 2 (see FILM_PLAN_ARCHITECTURE.md), this is a thin wrapper:
+    build_timeline() makes every editorial decision, compile_ffmpeg() mechanically
+    translates the result into a real ffmpeg command, this function just runs it.
+    Nothing about calling render() itself changed — same signature, same behavior,
+    same output — this split only changes what's INSIDE it."""
+    timeline = build_timeline(audio_path, ass_path, beats, font=font, style=style)
+    cmd = compile_ffmpeg(timeline, out_path)
     subprocess.run(cmd, check=True)
 
 
