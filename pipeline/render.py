@@ -3,7 +3,8 @@
 narration audio, and burned-in styled captions (.ass from captions.py).
 
 Usage: render.py <narration.mp3> <captions.ass> <output.mp4> <beats.json>
-  beats.json: a JSON list of {"path", "entity_type", "face": [fx,fy]|null, "duration"}
+  beats.json: a JSON list of {"path", "entity_type", "face": [fx,fy]|null, "duration",
+  "text" (optional — enables the year/timeline overlay, see motion_graphics.py)}
 
 Each beat's own visual plays for exactly its own real narration duration (from tts.py's
 per-beat synthesis) — not a flat division of total runtime — so a cut lands where the
@@ -15,9 +16,11 @@ a place or event gets a sparing, purposeful accent transition (circleopen/radial
 detected face when there is one (fetch_visuals.py's OpenCV pass) instead of blindly
 cropping to center — the crop drifts (a real pan, not just a scale change) from that point
 toward a nearby offset, and alternates both zoom direction and pan direction across beats
-for variety (see `_zoompan_expr()`/`_pan_targets()`). A fixed color grade, subtle vignette
-and film grain pass, plus an optional ducked music bed, are the last steps before captions
-burn in.
+for variety (see `_zoompan_expr()`/`_pan_targets()`). A beat whose narration names a
+specific year additionally gets an animated timeline-marker graphic over its first ~2s
+(see motion_graphics.py) — an actual explainer graphic generated from the content, not
+more footage treatment. A fixed color grade, subtle vignette and film grain pass, plus an
+optional ducked music bed, are the last steps before captions burn in.
 
 Requires ffmpeg on PATH.
 """
@@ -26,6 +29,8 @@ import random
 import subprocess
 import sys
 from pathlib import Path
+
+import motion_graphics
 
 WIDTH, HEIGHT = 1080, 1920
 FPS = 30
@@ -181,6 +186,7 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict]) -> 
     # a multi-input filter_complex and crash ffmpeg outright. Pinning stream 0 explicitly
     # avoids that regardless of how any given source file is muxed.
     filter_parts = []
+    labels = [f"v{i}" for i in range(n)]
     for i, beat in enumerate(beats):
         path = beat["path"]
         if path.lower().endswith(VIDEO_EXTS):
@@ -199,14 +205,26 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict]) -> 
                 f"format=yuv420p[v{i}]"
             )
 
-    prev_label = "v0"
+        # A beat whose narration names a specific year gets an animated timeline-marker
+        # graphic over its first ~2s — see motion_graphics.py for why this is a distinct
+        # feature from the pan/zoom/transition treatment above, not more of the same.
+        year_label = motion_graphics.extract_year_label(beat.get("text", ""))
+        if year_label:
+            overlay = motion_graphics.timeline_overlay_filter(
+                year_label, requested[i], f"v{i}", f"v{i}o"
+            )
+            if overlay:
+                filter_parts.append(overlay)
+                labels[i] = f"v{i}o"
+
+    prev_label = labels[0]
     acc_duration = requested[0]
     for i in range(1, n):
         t, transition_name = transitions[i - 1]
         offset = acc_duration - t
         out_label = f"x{i}"
         filter_parts.append(
-            f"[{prev_label}][v{i}]xfade=transition={transition_name}:duration={t:.3f}:offset={offset:.3f}[{out_label}]"
+            f"[{prev_label}][{labels[i]}]xfade=transition={transition_name}:duration={t:.3f}:offset={offset:.3f}[{out_label}]"
         )
         prev_label = out_label
         acc_duration += requested[i] - t

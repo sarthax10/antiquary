@@ -248,3 +248,16 @@ export const IconPip = (p) => (
     <rect x="12.5" y="11.5" width="7" height="5" rx="1" fill="currentColor" stroke="none" />
   </Svg>
 );
+export const IconEdit = (p) => (
+  <Svg {...p}>
+    <path d="M14.5 5.5 18.5 9.5 8 20H4v-4L14.5 5.5Z" />
+    <path d="M13 7 17 11" />
+  </Svg>
+);
+export const IconLayers = (p) => (
+  <Svg {...p}>
+    <path d="M12 3 20.5 8 12 13 3.5 8 12 3Z" />
+    <path d="M3.5 12 12 17l8.5-5" />
+    <path d="M3.5 16 12 21l8.5-5" />
+  </Svg>
+);

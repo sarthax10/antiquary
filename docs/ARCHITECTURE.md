@@ -75,9 +75,9 @@ addressable representation of a story's edit, not just a final rendered MP4:
   "version": 1,
   "duration": 42.3,
   "tracks": {
-    "visual":    [{"id","kind":"video"|"image","start","duration","entity_type","visual_query","face","source"}],
-    "narration": [{"id","start","duration","text"}],
-    "captions":  [{"id","text","start","end","emphasis"}],
+    "visual":    [{"id","kind":"video"|"image","start","duration","entity_type","visual_query","face","source","object_key"}],
+    "narration": [{"id","start","duration","text","object_key"}],
+    "captions":  [{"id","text","start","end","emphasis","words":[{"word","start","end"}]}],
     "music":     {"volume"} | null
   },
   "style": {"caption_font","caption_uppercase","voice"}
@@ -86,17 +86,28 @@ addressable representation of a story's edit, not just a final rendered MP4:
 
 One clip/cue per beat, in the same order `pipeline/generate_script.py`'s beats and
 `pipeline/tts.py`'s per-beat audio already produce — this generalizes what the
-auto-pipeline does today rather than replacing it. `pipeline/render.py` does **not**
-read this yet; it still consumes beats/audio/captions directly, so today's behavior is
-byte-for-byte unaffected. It carries no asset URLs — individual beat clips are local
-temp files during a run, not durably stored per-clip anywhere (only the final video is,
-to MinIO) — durable per-clip storage is real, separate follow-up work for whenever the
-editor needs to re-fetch/re-render one clip on its own.
+auto-pipeline does today rather than replacing it. The primary auto-generation path
+(`pipeline/render.py` via `run_pipeline.py`) still consumes beats/audio/captions
+directly, so that path's output is byte-for-byte unaffected by any of this.
 
-The plan (not yet built): a timeline editor UI reading/writing this JSON, `render.py`
-generalized to render *a* timeline (not just the auto-generated one), and AI-assisted
-edits (single operations, then natural-language chat) that patch this structure instead
-of regenerating the whole video.
+Each visual/narration entry's `object_key` points at that beat's own clip, durably
+uploaded to MinIO under `stories/<user_id>/<story_id>/clips/{visual,audio}_<NN>.<ext>` by
+`pipeline/enqueue_story.py._upload_clip_assets()` right after the Story row (and thus its
+id) exists — a temp-file-only clip can't survive `run_pipeline.py`'s own cleanup, so this
+is the only chance to keep it. `pipeline/render_timeline.py` downloads exactly these
+objects, rebuilds the narration track and a karaoke `.ass` from the caption track's own
+stored per-word timestamps (`captions.build_ass_from_track()` — not re-transcribed), and
+calls the same `render.render()` the auto-pipeline uses — so re-rendering an edited
+timeline shares one ffmpeg filter-graph implementation with the original generation.
+Nothing calls `render_timeline.py` yet outside manual/test use (`python
+render_timeline.py <story_id>`) — no editor route exists to trigger it. Stories rendered
+before this landed have entries with no `object_key`; `render_from_timeline()` raises
+rather than silently producing a broken video for those.
+
+The plan (not yet built): a timeline editor UI reading/writing this JSON, wired to an
+actual "save + re-render" route that calls `render_timeline.render_story()`, and
+AI-assisted edits (single operations, then natural-language chat) that patch this
+structure instead of regenerating the whole video.
 
 ## Package layout
 
@@ -150,9 +161,16 @@ pipeline/                    video generation, independent of the web app
                                optional ducked music bed (pipeline/assets/music/)
   timeline.py                  builds Story.timeline — the editable project
                                representation (visual/narration/caption/music tracks)
-                               the upcoming timeline editor reads/writes. Nothing
-                               renders from it yet; render.py still consumes beats/
-                               audio/captions directly. Purely additive foundation.
+                               the upcoming timeline editor reads/writes
+  enqueue_story.py             creates the Story row, uploads the final video, and
+                               (_upload_clip_assets) durably uploads each beat's own
+                               visual/audio clip to MinIO, recording object_key on the
+                               matching timeline entries
+  render_timeline.py           renders *from* a Story.timeline's durable per-clip
+                               assets + caption track — what a future editor's
+                               "save + re-render" action will call; not wired to any
+                               route yet. run_pipeline.py's own render still goes
+                               straight through render.py, unaffected.
 migrations/                  Alembic
 docs/                        this file, DEPLOYMENT.md, SERVER_SETUP.md
 tests/                        pytest — ownership scoping, the generation queue, and the

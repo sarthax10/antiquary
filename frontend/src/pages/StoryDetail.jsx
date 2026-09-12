@@ -4,7 +4,7 @@ import * as studioApi from "../api/studio";
 import { useCounts } from "../CountsContext";
 import { useToast } from "../ToastContext";
 import FactCheck from "../components/FactCheck";
-import { IconArrowLeft, IconCheck, IconFilm, IconRestore, IconReview, IconX } from "../components/icons";
+import { IconArrowLeft, IconCheck, IconEdit, IconFilm, IconRestore, IconReview, IconX } from "../components/icons";
 import StoryDossier from "../components/StoryDossier";
 import { Button, EmptyState, ErrorState, Skeleton, Stamp } from "../components/ui";
 import VideoFrame from "../components/VideoFrame";
@@ -73,6 +73,11 @@ export default function StoryDetail() {
             <span aria-hidden="true">/</span>
             <span aria-current="page">#{story.id}</span>
           </nav>
+        )}
+        {story && (
+          <Link to={`/stories/${story.id}/edit`} className="btn btn-secondary btn-sm detail-bar-edit">
+            <IconEdit />Edit
+          </Link>
         )}
       </div>
 

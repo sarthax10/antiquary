@@ -31,8 +31,12 @@ class Story(Base):
     # ordered, timed clips) that the future timeline editor reads and writes — see
     # docs/ARCHITECTURE.md "Timeline (editor data model)". Populated by the auto-generate
     # pipeline as this story's initial edit; {} for stories rendered before this existed.
-    # Not yet consumed by render.py (that generalization is a later, separate step) —
-    # today it's pure provenance/foundation, changing it does not change the video.
+    # Each visual/narration clip's own asset is durably stored in MinIO under
+    # stories/<user_id>/<id>/clips/... (object_key on the entry) — see pipeline/
+    # enqueue_story.py — so pipeline/render_timeline.py can re-render this exact timeline
+    # later. The primary auto-generation path (render.py via run_pipeline.py) still
+    # renders from beats/audio/captions directly, not from this column — this is what a
+    # future editor's "save + re-render" action uses once a human edits something here.
     timeline = Column(JSONB, nullable=False, default=dict)
     fact_check = Column(JSONB, nullable=False, default=dict)
     needs_human_review = Column(Boolean, nullable=False, default=True)

@@ -35,8 +35,21 @@ def ensure_bucket() -> None:
         s3.create_bucket(Bucket=S3_BUCKET)
 
 
+def upload_asset(local_path: str, object_key: str, content_type: str = "application/octet-stream") -> None:
+    """Generic upload for any per-story object — used for the durably-stored per-clip
+    visual/audio assets (see pipeline/enqueue_story.py) as well as the final video.
+    upload_video() below is a thin wrapper kept for its existing callers."""
+    _client().upload_file(local_path, S3_BUCKET, object_key, ExtraArgs={"ContentType": content_type})
+
+
 def upload_video(local_path: str, object_key: str) -> None:
-    _client().upload_file(local_path, S3_BUCKET, object_key, ExtraArgs={"ContentType": "video/mp4"})
+    upload_asset(local_path, object_key, content_type="video/mp4")
+
+
+def download_asset(object_key: str, local_path: str) -> None:
+    """Fetches any object to a local file — used by pipeline/render_timeline.py to pull a
+    story's durably-stored per-clip assets back down to re-render from its timeline."""
+    _client().download_file(S3_BUCKET, object_key, local_path)
 
 
 def get_video_object(object_key: str, range_header: str | None = None) -> dict:

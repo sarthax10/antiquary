@@ -11,7 +11,7 @@ from flask import Flask, jsonify
 
 
 def create_app() -> Flask:
-    from . import admin, auth, db, studio
+    from . import admin, auth, db, editor, studio
     from .cli import register_cli
     from .config import load_config
     from .extensions import csrf, limiter, login_manager
@@ -26,6 +26,7 @@ def create_app() -> Flask:
     app.register_blueprint(auth.bp)
     app.register_blueprint(admin.bp)
     app.register_blueprint(studio.bp)
+    app.register_blueprint(editor.bp)
     register_cli(app)
 
     @app.teardown_appcontext

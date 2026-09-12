@@ -94,6 +94,7 @@ def run(topic: str) -> str:
                 "entity_type": asset["entity_type"],
                 "face": asset["face"],
                 "duration": audio["duration"],
+                "text": audio["text"],
             }
             for asset, audio in zip(assets, beat_audio)
         ]
@@ -108,8 +109,14 @@ def run(topic: str) -> str:
             voice=voice,
             music_volume=render.MUSIC_VOLUME if render.music_available() else None,
         )
+        clip_files = [
+            {"visual_path": asset["path"], "audio_path": audio["path"]}
+            for asset, audio in zip(assets, beat_audio)
+        ]
 
-        return enqueue_story.enqueue(str(video_path), str(script_path), topic, timeline=story_timeline)
+        return enqueue_story.enqueue(
+            str(video_path), str(script_path), topic, timeline=story_timeline, clip_files=clip_files
+        )
     finally:
         # Every generation's work dir (source images/clips, per-beat audio, the .ass
         # file, a duplicate final.mp4 alongside the one already uploaded to MinIO)

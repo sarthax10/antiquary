@@ -5,14 +5,20 @@ one addressable, structured representation of what the auto-generate pipeline al
 produces, instead of three separate ad-hoc outputs (beats, audio clips, an .ass file)
 that only render.py knows how to combine.
 
-Nothing renders from this yet — render.py still consumes beats/audio/captions directly,
-byte-for-byte the same as before this module existed. Building it is purely additive.
+The auto-generate pipeline (run_pipeline.py) still renders straight from beats/audio/
+captions directly, byte-for-byte the same as before this module existed — building the
+timeline here doesn't touch that path or its output. It's render_timeline.py that renders
+*from* a timeline (durably-stored per-clip assets + the caption track's own text/timing),
+which is what a future editor's "save + re-render" action will call once a human has
+actually changed something on the timeline.
 
-Deliberately carries no asset URLs: individual beat visual/audio clips only exist as
-local temp files during a run (media/tmp/<run_id>/...) and aren't durably uploaded
-anywhere per-clip today (only the final rendered video is, to MinIO) — that's real,
-separate follow-up work for whenever the editor actually needs to re-fetch/re-render an
-individual clip, not something to fake a path for now.
+build_timeline() itself doesn't set each visual/narration entry's "object_key" — it can't,
+since a clip's durable MinIO location is namespaced by the story's own id
+(stories/<user_id>/<story_id>/clips/...), which doesn't exist until enqueue_story.enqueue()
+creates the Story row. enqueue_story._upload_clip_assets() fills object_key in on every
+entry right after, before the timeline is ever committed — so by the time a Story row is
+readable, its timeline is already self-contained (except for stories rendered before this
+existed, whose entries simply have no "object_key").
 """
 VIDEO_EXTS = (".mp4", ".mov", ".webm", ".m4v")
 

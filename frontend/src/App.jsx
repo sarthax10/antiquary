@@ -4,6 +4,7 @@ import Account from "./pages/Account";
 import AdminUsers from "./pages/AdminUsers";
 import Archive from "./pages/Archive";
 import Create from "./pages/Create";
+import Editor from "./pages/Editor";
 import Library from "./pages/Library";
 import Login from "./pages/Login";
 import Pending from "./pages/Pending";
@@ -25,6 +26,7 @@ export default function App() {
         <Route path="/library" element={<Library />} />
         <Route path="/archive" element={<Archive />} />
         <Route path="/stories/:id" element={<StoryDetail />} />
+        <Route path="/stories/:id/edit" element={<Editor />} />
         <Route path="/account" element={<Account />} />
 
         <Route element={<RequireAdmin />}>
