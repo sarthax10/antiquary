@@ -170,6 +170,14 @@ def _validate_beat_groups(raw_beats, n_sentences: int) -> list[list[int]] | None
         nums = b.get("sentences") if isinstance(b, dict) else None
         if not isinstance(nums, list) or not nums:
             return None
+        # The model has been observed returning JSON-string numbers (["1","2"]) or floats
+        # ([1.0, 2.0]) instead of ints — `n - 1` on a string raises an uncaught TypeError
+        # that kills the whole generation (no retry), and a float slips past this check
+        # silently (0.0 == 0) only to blow up later on float indexing. Reject both here so
+        # a model quirk falls through to the same retry/fallback path every other
+        # validation failure already uses, instead of crashing generate() outright.
+        if not all(isinstance(n, int) and not isinstance(n, bool) for n in nums):
+            return None
         idx = [n - 1 for n in nums]
         if idx != list(range(covered, covered + len(idx))):
             return None
@@ -301,6 +309,15 @@ def generate(topic: str, max_attempts: int = 4, on_stage=None) -> dict:
             checked = fact_check(script["narration"])
         except (requests.exceptions.RequestException, json.JSONDecodeError, KeyError, ValueError) as e:
             last_error = e
+            # Same bug class already fixed in write_beats(): every attempt-level failure
+            # here was silently swallowed, with only a bare, stage-agnostic RuntimeError
+            # once every attempt was exhausted — no way to tell which stage broke or why
+            # without this. Printed so it lands in job_manager's captured generation log.
+            print(
+                f"[generate_script] generate() attempt {attempt + 1}/{max_attempts} failed: "
+                f"{type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
             continue
 
         claims = checked.get("claims", [])

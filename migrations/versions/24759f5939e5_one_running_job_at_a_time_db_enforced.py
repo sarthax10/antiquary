@@ -28,6 +28,24 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
+    # If more than one row is already 'running' — exactly the pre-fix race this index
+    # exists to prevent, reproduced in testing — creating the index below raises
+    # UniqueViolation and crashes the upgrade outright, with no automatic recovery (see
+    # this migration's module docstring for why that's fatal, not just noisy). Defuse it:
+    # keep the oldest running row as the real one and mark any others as errored — they
+    # were never a valid state to begin with, and self-healing them here is strictly
+    # better than leaving the app permanently unable to start.
+    op.execute(
+        """
+        UPDATE generation_jobs
+        SET status = 'error',
+            error = 'Cleared by migration 24759f5939e5: found running concurrently with another job.'
+        WHERE status = 'running'
+          AND id NOT IN (
+              SELECT id FROM generation_jobs WHERE status = 'running' ORDER BY started_at ASC LIMIT 1
+          )
+        """
+    )
     op.execute(
         """
         CREATE UNIQUE INDEX ix_generation_jobs_one_running

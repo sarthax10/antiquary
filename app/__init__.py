@@ -11,6 +11,8 @@ from flask import Flask, jsonify
 
 
 def create_app() -> Flask:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+
     from . import admin, auth, db, editor, studio
     from .cli import register_cli
     from .config import load_config
@@ -18,6 +20,15 @@ def create_app() -> Flask:
 
     app = Flask(__name__, static_folder=None)  # pure JSON API — Caddy serves the built React app
     app.config.from_object(load_config())
+
+    # Every request reaches this app via `Caddy -> reverse_proxy app:8787` inside the
+    # Docker Compose network, so request.remote_addr is always Caddy's container IP, never
+    # the real client's, unless something trusts the X-Forwarded-* headers Caddy sets.
+    # Without this, Flask-Limiter's per-IP rate limits (get_remote_address) are actually
+    # one shared, site-wide bucket — every login attempt from every real user counts
+    # against the same budget. x_for=1/x_proto=1 trusts exactly the one hop Caddy
+    # represents, not an arbitrary chain a client could spoof.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
     login_manager.init_app(app)
     csrf.init_app(app)

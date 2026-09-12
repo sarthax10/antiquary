@@ -140,28 +140,36 @@ def get_status(user=None) -> dict:
     """Self-heals a crashed running job and promotes the oldest queued job once nothing
     is running. With `user`, reports that user's own running/queued job (or their most
     recent finished one) plus the global queue depth; without one (internal callers),
-    reports whichever job is running."""
-    session = get_session()
-    running = _running_job()
-    if running is not None and (not running.pid or not _pid_alive(running.pid)):
-        running.status = "error"
-        running.error = "Generation process ended unexpectedly (was the app restarted mid-run?)."
-        running.finished_at = utcnow()
-        session.commit()
-        running = None
+    reports whichever job is running.
 
-    if running is None:
-        queued = _queued_jobs()
-        if queued:
-            job = queued[0]
-            job.status = "running"
-            try:
-                session.commit()
-            except IntegrityError:
-                session.rollback()  # lost a race — someone else's job is running now
-            else:
-                _spawn(job)
-                running = job
+    The self-heal + promotion below runs under `_lock`, same as start()/cancel() — without
+    it, two near-simultaneous polls could both see "nothing running" and both promote+spawn
+    the same queued job: the DB-level unique index only blocks a second *row* from being
+    running, not two threads both completing the UPDATE on the *same* row and each calling
+    _spawn() on it, which would launch two real pipeline subprocesses against one Ollama
+    instance — exactly what the one-subprocess-at-a-time design exists to prevent."""
+    session = get_session()
+    with _lock:
+        running = _running_job()
+        if running is not None and (not running.pid or not _pid_alive(running.pid)):
+            running.status = "error"
+            running.error = "Generation process ended unexpectedly (was the app restarted mid-run?)."
+            running.finished_at = utcnow()
+            session.commit()
+            running = None
+
+        if running is None:
+            queued = _queued_jobs()
+            if queued:
+                job = queued[0]
+                job.status = "running"
+                try:
+                    session.commit()
+                except IntegrityError:
+                    session.rollback()  # lost a race — someone else's job is running now
+                else:
+                    _spawn(job)
+                    running = job
 
     queue_length = get_session().query(GenerationJob).filter_by(status="queued").count()
 
@@ -198,25 +206,35 @@ def set_stage(stage_key: str) -> None:
 
 def _watch(proc: subprocess.Popen, job_id: int) -> None:
     global _current_proc
-    returncode = proc.wait()
-    session = get_session()
-    with _lock:
-        if _current_proc is proc:
-            _current_proc = None
-    job = session.get(GenerationJob, job_id)
-    if job is None or job.status == "cancelled":
-        return  # cancel() already finalized this run — don't overwrite with "error"
+    from app import db  # local import: keep this module Flask-optional (see app/db.py's own docstring)
 
-    if returncode == 0:
-        tail = _log_tail(200).strip()
-        story_id = tail.splitlines()[-1].strip() if tail else None
-        job.status = "done"
-        job.resulting_story_id = story_id
-    else:
-        job.status = "error"
-        job.error = _log_tail(800).strip() or f"exited with code {returncode}"
-    job.finished_at = utcnow()
-    session.commit()
+    try:
+        returncode = proc.wait()
+        session = get_session()
+        with _lock:
+            if _current_proc is proc:
+                _current_proc = None
+        job = session.get(GenerationJob, job_id)
+        if job is None or job.status == "cancelled":
+            return  # cancel() already finalized this run — don't overwrite with "error"
+
+        if returncode == 0:
+            tail = _log_tail(200).strip()
+            story_id = tail.splitlines()[-1].strip() if tail else None
+            job.status = "done"
+            job.resulting_story_id = story_id
+        else:
+            job.status = "error"
+            job.error = _log_tail(800).strip() or f"exited with code {returncode}"
+        job.finished_at = utcnow()
+        session.commit()
+    finally:
+        # This is a long-lived daemon thread, not a Flask request — nothing else ever
+        # calls remove_session() for it. Without this, the scoped_session registry keeps
+        # this thread's session forever (a real leak over the server's lifetime), and if
+        # CPython later reuses this thread's id for a new thread, that thread could
+        # inherit this one's abandoned session state.
+        db.remove_session()
 
 
 def start(topic: str, user) -> tuple[bool, str]:

@@ -11,6 +11,7 @@ Revises: be566ae7971b
 Create Date: 2026-09-11 21:20:18.949193
 
 """
+import sys
 from typing import Sequence, Union
 
 from alembic import op
@@ -33,7 +34,27 @@ def upgrade() -> None:
         WHERE created_by_id IS NULL
         """
     )
-    op.alter_column("stories", "created_by_id", existing_type=sa.Integer(), nullable=False)
+    # The backfill above only succeeds if an admin already exists. On a database state
+    # where `stories` has rows but `users` has none yet (reproduced in testing: possible on
+    # a partial restore, or migration history replayed against a fresh/emptied DB), it's a
+    # silent no-op and created_by_id stays NULL — the unconditional `SET NOT NULL` below
+    # would then crash the upgrade outright (IntegrityError) with no automatic recovery,
+    # since docker-compose's app command retries the same failing startup forever. Guard it:
+    # only enforce NOT NULL once the backfill has actually left no NULLs behind.
+    bind = op.get_bind()
+    remaining_null = bind.execute(
+        sa.text("SELECT count(*) FROM stories WHERE created_by_id IS NULL")
+    ).scalar()
+    if remaining_null:
+        print(
+            f"WARNING: {remaining_null} story row(s) still have no owner (no admin user "
+            "exists to backfill to) — leaving created_by_id nullable for now. Create an "
+            "admin (seed-admin) and re-run this backfill by hand before relying on "
+            "ownership scoping for these rows.",
+            file=sys.stderr,
+        )
+    else:
+        op.alter_column("stories", "created_by_id", existing_type=sa.Integer(), nullable=False)
     op.create_index(op.f("ix_stories_created_by_id"), "stories", ["created_by_id"], unique=False)
 
 

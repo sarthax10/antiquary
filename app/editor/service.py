@@ -97,6 +97,8 @@ def start_render(story_id: str, user: User) -> tuple[bool, str]:
     def _run() -> None:
         import render_timeline  # pipeline/ is on sys.path (see module load above)
 
+        from app import db
+
         try:
             render_timeline.render_story(story_id)
             with _render_lock:
@@ -104,6 +106,11 @@ def start_render(story_id: str, user: User) -> tuple[bool, str]:
         except Exception as exc:  # noqa: BLE001 - surfaced to the user via render_status(), not swallowed
             with _render_lock:
                 _render_status[story_id] = {"status": "error", "error": str(exc)}
+        finally:
+            # Long-lived daemon thread, not a Flask request — nothing else calls
+            # remove_session() for it. Same leak/reuse risk as job_manager._watch();
+            # see that function's comment for the full reasoning.
+            db.remove_session()
 
     threading.Thread(target=_run, daemon=True).start()
     return True, "rendering started"

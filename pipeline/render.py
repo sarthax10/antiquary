@@ -222,6 +222,16 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict]) -> 
     for i in range(1, n):
         t, transition_name = transitions[i - 1]
         offset = acc_duration - t
+        if offset < 0:
+            # The accumulated duration so far (in practice: beat 0's own padded duration,
+            # for the first transition) is shorter than half this transition's duration —
+            # a real case, not contrived: the writer prompt explicitly wants punchy,
+            # one-word hook lines, and a short first beat plus a normal crossfade can
+            # legitimately produce this. A negative offset is an invalid xfade argument
+            # (confirmed: ffmpeg rejects it) — shrink the transition to fit what's
+            # actually there instead of trusting the arithmetic blindly.
+            t = max(0.0, acc_duration)
+            offset = 0.0
         out_label = f"x{i}"
         filter_parts.append(
             f"[{prev_label}][{labels[i]}]xfade=transition={transition_name}:duration={t:.3f}:offset={offset:.3f}[{out_label}]"
@@ -240,9 +250,17 @@ def render(audio_path: str, ass_path: str, out_path: str, beats: list[dict]) -> 
 
     audio_map = f"{audio_input_index}:a"  # a bare stream reference, no filter_complex label
     if music_input_index is not None:
+        # Mirror the fade-out with a fade-in — without this, music hit its full ducked
+        # volume the instant the filter chain started, an audible hard cut on entry that
+        # contradicted the "no audible hard cut in or out" bar (Dana Okafor's persona)
+        # despite the *presence* of ducking/fade-out having already been verified (#9).
+        # Clamped to half the total duration so a very short video can't make the two
+        # fades overlap into something louder than either alone.
+        fade_d = min(1.2, total_duration / 2) if total_duration > 0 else 0.0
         filter_parts.append(
             f"[{music_input_index}:a]volume={MUSIC_VOLUME},atrim=0:{total_duration:.3f},"
-            f"asetpts=PTS-STARTPTS,afade=t=out:st={max(0, total_duration - 1.2):.3f}:d=1.2[music]"
+            f"asetpts=PTS-STARTPTS,afade=t=in:st=0:d={fade_d:.3f},"
+            f"afade=t=out:st={max(0, total_duration - fade_d):.3f}:d={fade_d:.3f}[music]"
         )
         filter_parts.append(f"[{audio_input_index}:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]")
         audio_map = "[aout]"  # now a filter_complex output label, needs brackets
