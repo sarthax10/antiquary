@@ -40,7 +40,7 @@ def test_extract_year_label_empty_text():
 
 
 def test_timeline_overlay_filter_skips_too_short_beat():
-    # MIN_SHOW is 1.0s and TAIL_MARGIN is 0.3s, so anything under ~1.3s can't fit.
+    # MIN_SHOW is 1.5s and TAIL_MARGIN is 0.3s, so anything under 1.8s can't fit.
     assert mg.timeline_overlay_filter("1872", 1.0, "v0", "v0o") is None
 
 
@@ -52,10 +52,12 @@ def test_timeline_overlay_filter_caps_show_time_on_long_beat():
 
 
 def test_timeline_overlay_filter_shrinks_show_time_on_short_beat():
-    # 1.5s beat, 0.3s tail margin -> show_until = 1.2s, below MAX_SHOW.
-    result = mg.timeline_overlay_filter("1872", 1.5, "v0", "v0o")
+    # 2.0s beat, 0.3s tail margin -> show_until = 1.7s: above MIN_SHOW (1.5s, so the
+    # overlay still fits) but below MAX_SHOW (2.6s, so it's the beat that's constraining
+    # show_until here, not the cap).
+    result = mg.timeline_overlay_filter("1872", 2.0, "v0", "v0o")
     assert result is not None
-    assert "between(t,0,1.200)" in result
+    assert "between(t,0,1.700)" in result
 
 
 def test_timeline_overlay_filter_references_in_and_out_labels():
@@ -72,3 +74,40 @@ def test_timeline_overlay_filter_sanitizes_label_text():
     text_value = result.split("text='", 1)[1].split("'", 1)[0]
     assert "'" not in text_value
     assert ":" not in text_value
+
+
+def test_timeline_overlay_filter_underline_width_is_never_a_t_expression():
+    # Regression test for a real, confirmed ffmpeg bug: drawbox has its own option
+    # literally named `t` (alias for `thickness`, set here via `t=fill`), and inside
+    # drawbox's *own* w=/h=/x=/y= expressions the bare identifier `t` resolves to that
+    # option's value, not to elapsed time — silently, with no parse error. A width
+    # expression like `w='(210*...*t...)'` looked correct on paper but always evaluated
+    # against the thickness option's value (verified: constant regardless of real time
+    # or -ss). The fix computes the eased width in Python and emits one drawbox per
+    # short time window with a literal, static width — assert that shape here so a
+    # future edit can't reintroduce a `t`-based width expression without this failing.
+    result = mg.timeline_overlay_filter("1872", 3.5, "v0", "v0o")
+    assert result is not None
+    drawbox_calls = [seg for seg in result.split(",") if seg.startswith("drawbox=") or "]drawbox=" in seg]
+    assert len(drawbox_calls) > 1, "expected multiple stepped drawbox segments for the underline"
+    for call in drawbox_calls:
+        w_value = call.split("w=", 1)[1].split(":", 1)[0]
+        assert "t" not in w_value, f"drawbox width must be a static number, not a `t`-expression: {w_value!r}"
+        float(w_value)  # must parse as a plain number
+
+
+def test_underline_width_segments_grows_holds_and_shrinks():
+    # Pure-function check on the eased width curve itself, independent of ffmpeg: starts
+    # near 0, reaches the full width during the hold, ends near 0.
+    segments = mg._underline_width_segments(
+        entry_duration=0.55, exit_start=2.1, exit_duration=0.5, w_max=210
+    )
+    widths = [w for _, _, w in segments]
+    assert widths[0] < 30  # just starting to grow
+    assert any(w >= 209 for w in widths)  # reaches (approximately) full width somewhere
+    assert widths[-1] < 30  # nearly gone by the end
+    # Monotonically non-decreasing through the entry ramp, then non-increasing through exit.
+    entry_widths = [w for s0, s1, w in segments if s1 <= 0.55]
+    exit_widths = [w for s0, s1, w in segments if s0 >= 2.1]
+    assert entry_widths == sorted(entry_widths)
+    assert exit_widths == sorted(exit_widths, reverse=True)

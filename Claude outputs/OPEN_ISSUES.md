@@ -97,6 +97,42 @@ simple regex over the beat's own text. Explicitly not yet covered: an animated m
 callout — worth adding as v2/v3 following the same pattern once v1 is confirmed working
 end-to-end, per the project's own "versioned, not one-shot" precedent for the editor.
 
+**v2 redesign + a real bug, found, root-caused, and fixed (2026-09-12)**: the user
+called the original design out directly — "looked really bad, like a basic element from
+Filmora" — a fair hit (linear motion, wide flat bar, hard cutoff). Rebuilt as a tight
+lower-third (drawtext's own box/boxcolor, no separate bar), eased entrance/exit, and a
+short accent underline instead of a wide bar. The eased underline's WIDTH then hit a
+real, obscure ffmpeg bug during verification: drawbox has its own option literally named
+`t` (an alias for `thickness`, e.g. `t=fill`), and *inside drawbox's own* `w=`/`h=`/
+`x=`/`y=` expressions, the bare identifier `t` silently resolves to that option's own
+value, not to elapsed time — no parse error, since `t` is a recognized identifier there,
+just not the one intended. Confirmed by isolated testing: with `t=fill` set, `w='(500*t)'`
+evaluated to a huge constant (the "fill" sentinel) regardless of real time or `-ss`; with
+a plain numeric thickness, the same expression evaluated to `500 * <that thickness
+number>`, completely ignoring elapsed time. (`enable=` is unaffected — confirmed via a
+separate isolated test — it's evaluated by ffmpeg's own timeline-expression framework,
+not the filter's own option parser.) The earlier "`w=0` means fill-to-edge" theory from
+initial debugging was a real, separately-confirmed ffmpeg behavior, but it was not the
+actual root cause — the near-frame-width readings it seemed to explain made it a
+plausible-looking red herring.
+
+**Fix**: `motion_graphics.py`'s `_underline_width_segments()` computes the eased
+grow/hold/shrink curve in plain Python (no ffmpeg expression involved), then emits one
+`drawbox` per short time window with a literal, static width, gated by a real
+`enable='between(t,...)'` clause. Verified two ways: (1) an isolated synthetic clip,
+numeric pixel-width measurement at 8 checkpoints spanning entry/hold/exit — matches the
+expected eased curve at every point (27→183→210, holds at ~210, 209→175→29→0), plus
+visual frame inspection; (2) the actual `render.py` pipeline end-to-end (Ken Burns,
+grade, vignette, transitions all composited) — three real rendered frames confirm the
+text/underline animate together correctly and the graphic is fully, cleanly gone
+afterward. Added `tests/test_motion_graphics.py::test_timeline_overlay_filter_underline_
+width_is_never_a_t_expression` (regression-guards the exact bug class — asserts every
+drawbox width is a static number, never a `t`-expression) and `test_underline_width_
+segments_grows_holds_and_shrinks` (pure-function check on the eased curve). Also fixed
+one unrelated stale test (`shrinks_show_time_on_short_beat` was written against an old
+`MIN_SHOW=1.0` before this same redesign deliberately raised it to `1.5`, and was never
+updated). Full suite: 64/64 pass.
+
 The original prompt's animation ask ("if there's timeline or stuff like that requires
 animations for making the user understand... use modern UI examples to create animation
 elements") describes animated explainer graphics (timelines, maps, diagrams) that help a
