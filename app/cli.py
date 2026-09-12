@@ -41,7 +41,13 @@ def register_cli(app: Flask) -> None:
     def migrate_video_keys():
         """One-off: renames existing MinIO objects from the old stories/<id>/video.mp4
         layout to the user-namespaced stories/<user_id>/<id>/video.mp4 layout added
-        alongside per-user story ownership. Idempotent — safe to re-run."""
+        alongside per-user story ownership. Idempotent — safe to re-run: commits after
+        each story individually (not once at the end), so a transient failure partway
+        through leaves already-migrated rows correctly pointed at their new key and only
+        re-attempts the ones that hadn't moved yet — copy_video() deletes the old object
+        as it goes, so a batched single commit at the end would leave a migrated story's
+        DB row still pointing at an already-deleted old key if anything failed later in
+        the loop, and a re-run would then fail identically on that story forever."""
         from app import storage
         from app.db import get_session
         from app.models import Story
@@ -55,6 +61,6 @@ def register_cli(app: Flask) -> None:
                 continue
             storage.copy_video(story.video_object_key, new_key)
             story.video_object_key = new_key
+            session.commit()
             migrated += 1
-        session.commit()
         click.echo(f"Migrated {migrated} video object key(s).")

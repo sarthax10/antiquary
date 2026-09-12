@@ -70,6 +70,7 @@ def logout():
 
 @bp.route("/change-password", methods=["POST"])
 @login_required
+@limiter.limit("5 per minute")
 def change_password():
     data = request.get_json(silent=True) or {}
     error = service.change_password(
@@ -77,6 +78,11 @@ def change_password():
     )
     if error:
         return jsonify(error=error), 400
+    # change_password() just bumped session_version, which would otherwise invalidate
+    # this very session on its next request too — re-issue the session cookie with the
+    # new version so the browser that just proved its identity stays logged in; every
+    # other session (stolen cookie, another device) has no such refresh and stays dead.
+    login_user(current_user)
     return jsonify(message="Password updated.")
 
 

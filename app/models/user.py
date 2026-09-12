@@ -26,6 +26,11 @@ class User(Base, UserMixin):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     approved_at = Column(DateTime(timezone=True), nullable=True)
     approved_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # Bumped on every password change (self-service or admin-reset) — encoded into
+    # get_id() below so an existing session cookie stops validating the moment the
+    # password it was issued under changes, not just on that browser's next login.
+    # Without this, a stolen session cookie survives a password reset meant to kill it.
+    session_version = Column(Integer, nullable=False, default=1)
 
     approved_by = relationship("User", remote_side=[id])
 
@@ -45,4 +50,4 @@ class User(Base, UserMixin):
         return self.status == "approved"
 
     def get_id(self) -> str:
-        return str(self.id)
+        return f"{self.id}:{self.session_version}"

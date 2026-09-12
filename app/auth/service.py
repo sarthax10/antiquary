@@ -55,24 +55,35 @@ def create_signup_request(email: str, password: str, role: str = "user", status:
 
 
 def change_password(user: User, current_password: str, new_password: str) -> str | None:
-    """Self-service password change. Returns an error message, or None on success."""
+    """Self-service password change. Returns an error message, or None on success.
+
+    Bumps session_version, invalidating every session cookie issued before this change —
+    including, momentarily, the caller's own. app/auth/routes.py re-logs the caller in
+    right after calling this so their own browser isn't logged out mid-flow; every other
+    session (a stolen cookie, another device) has no such refresh and stays invalidated,
+    which is the actual point."""
     if not check_password_hash(user.password_hash, current_password):
         return "Current password is incorrect."
     pw_error = password_error(new_password)
     if pw_error:
         return pw_error
     user.password_hash = generate_password_hash(new_password)
+    user.session_version += 1
     get_session().commit()
     return None
 
 
 def set_password(user: User, new_password: str) -> str | None:
     """Admin-initiated reset — no current-password check, used from app/admin/service.py.
-    Returns an error message, or None on success."""
+    Returns an error message, or None on success. Bumps session_version so every one of
+    that user's existing sessions is invalidated immediately (the point of an admin reset
+    is often "this account may be compromised," so an already-open session — the
+    attacker's, or the legitimate user's stale one — shouldn't just keep working)."""
     pw_error = password_error(new_password)
     if pw_error:
         return pw_error
     user.password_hash = generate_password_hash(new_password)
+    user.session_version += 1
     get_session().commit()
     return None
 
