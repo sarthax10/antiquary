@@ -1646,3 +1646,82 @@ today. Getting real GPU illustration onto the actual live site would need either
 hardware added to `reliquary` itself, or a deliberate infrastructure decision about
 where generation should run — not something to solve unilaterally; flagging it as a real
 open question rather than a bug.
+
+## 64. Widened media sourcing — NASA, Europeana, Flickr Commons, Google CSE (license-filtered)
+
+**Status: PARTIAL — NASA + Europeana wired and live-verified; Flickr Commons + Google CSE implemented, pending real API keys; Library of Congress investigated and blocked**
+
+Milestone 3 from `FILM_PLAN_ARCHITECTURE.md`, triggered directly by the user asking to
+"improve the video sources... include YouTube and Twitter." Both were declined
+outright, for real reasons stated plainly rather than silently ignored: downloading
+from YouTube violates its own Terms of Service regardless of a specific video's
+copyright license (the same reasoning already applied when Internet Archive was chosen
+over YouTube for #62); almost nothing posted on Twitter/X carries any reuse license at
+all (default is full copyright to the poster), and X's own API terms prohibit bulk
+media scraping for reuse outside the platform. A follow-up ask for "Google Images"
+was redirected to the real legitimate version instead of declined outright: Google's
+Custom Search JSON API supports a `rights` parameter that filters to actually-licensed
+images, unlike raw Google Images results which carry no reuse rights at all.
+
+**Library of Congress — investigated, not wired in.** `loc.gov` currently blocks even a
+plain `GET /robots.txt` behind a Cloudflare JS challenge (confirmed directly this
+session — every endpoint tested returned the same "Just a moment..." interstitial, not
+real content). No plain HTTP client can reach it without bypassing anti-bot protection,
+which this project won't do. A real, confirmed technical blocker, not a hypothetical
+concern — recorded here so a future session doesn't re-attempt the same dead end
+without checking first.
+
+**NASA Image and Video Library — wired in, real, live-verified.** No API key required
+(`images-api.nasa.gov` is a public, unauthenticated endpoint, confirmed with real
+requests this session). NASA's own media usage guidelines make agency content generally
+public domain by default, so — unlike every other source in this module — no per-item
+license check is needed, only the shared relevance gate. Verified: real queries
+("Apollo 11 moon landing", "lunar module Eagle") return real, correctly-filtered
+results; a real end-to-end `_fetch_generic()` call with earlier sources forced to miss
+confirmed the waterfall genuinely reaches it, not just that the standalone function
+works.
+
+**Europeana — wired in, real, live-verified.** Real per-item `rights` metadata is
+present and, confirmed directly this session, genuinely mixed: the same query's real
+results included CC0/public-domain items alongside CC-BY-NC-ND and outright
+"In Copyright" ones — nothing here is assumed clean the way NASA's agency-wide default
+allows. A real allow-list (`_EUROPEANA_ALLOWED_RIGHTS`) accepts only public-domain
+marks, CC0, CC-BY, and CC-BY-SA — deliberately excluding "No Copyright - Other Known
+Legal Restrictions" even though it sounds permissive (the name itself says there may be
+other real restrictions, e.g. privacy/publicity rights). Uses Europeana's own published
+public demo key (`api2demo`, confirmed working live this session) when
+`EUROPEANA_API_KEY` isn't set in `.env` — real and usable today, but shared/rate-limited;
+`.env.example` documents getting a free personal key for reliable production use.
+Verified with 4 real queries: 3 of 4 returned a real, relevant, license-clean image
+(the 4th — "Eiffel Tower construction" — genuinely had no qualifying top-8 result at
+that moment, an honest miss the strict relevance+license gate is supposed to produce
+sometimes, not a bug).
+
+**Flickr Commons and Google Custom Search — implemented, NOT live-verified.** Both
+need a real, free-to-obtain API key/credential this environment doesn't have. Built
+against each provider's own documented response shape (`flickr.photos.search`'s
+extras/is_commons parameters; Google's Custom Search JSON API's `rights` filter) and
+unit-tested against that documented shape, but per this project's own "verify against
+the real stack" rule, neither should be trusted as actually working until someone adds
+a real key to `.env` and re-runs
+`test_flickr_commons_search_real_shape_with_a_fake_key`'s real-key equivalent. Both
+gracefully no-op (return `None`, skip silently) when their credentials are absent —
+exactly `PEXELS_API_KEY`'s existing pattern — so their absence causes no behavior
+change today.
+
+**A real latent bug fixed as part of this refactor, not introduced by it**: the
+pre-existing Commons→Pexels-photo fallback shared ONE `try/except` block, meaning a
+`RequestException` from Commons silently skipped Pexels photo too, not just Commons —
+any source's transient network hiccup killed every source listed after it. The new
+`_first_image_hit()` helper isolates each source's own failure, a real correctness fix
+surfaced by needing to chain 6 image sources instead of 2 — a regression test
+(`test_first_image_hit_isolates_one_sources_failure_from_the_rest`) reproduces the
+exact bug and confirms it's fixed. `_archive_org_search`'s relevance-gate logic was
+also extracted into a shared `_title_relevant()` helper (behavior-preserving — its own
+existing tests, including the "Advance on Rome, 1944" false-positive regression test,
+still pass unchanged) so all 5 keyword-search-based sources (Internet Archive, NASA,
+Europeana, Flickr Commons, Google CSE) share one proven relevance check instead of
+five separate copies of the same logic.
+
+Full suite: 139/140 pass (1 skip — the real Europeana query with no qualifying result
+at test-run time, by design not a failure).

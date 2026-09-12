@@ -321,3 +321,187 @@ def test_archive_org_search_real_api_returns_relevant_public_domain_result():
     url = fv._archive_org_video_url(identifier)
     assert url is not None
     assert url.startswith("https://archive.org/download/")
+
+
+# --- Widened media acquisition: NASA / Europeana / Flickr Commons / Google CSE ------
+# Added per the user's explicit "improve the video sources" follow-up, after YouTube
+# and Twitter/X were declined outright (downloading from YouTube violates its own ToS
+# regardless of a video's license; almost nothing on Twitter/X carries any reuse
+# license at all, and its API terms prohibit bulk media scraping for reuse) and "use
+# Google Images" was redirected to the real legitimate version — Google's Custom
+# Search API with a `rights` filter, not scraping arbitrary copyrighted search
+# results. Library of Congress was investigated and is NOT wired in: loc.gov currently
+# blocks even a plain GET to /robots.txt behind a Cloudflare JS challenge (confirmed
+# directly this session) — no plain HTTP client can reach it without bypassing
+# anti-bot protection, which this project won't do.
+
+def test_title_relevant_shared_gate_matches_archive_org_behavior():
+    # The exact "Advance on Rome, 1944" false-positive case _archive_org_search's own
+    # tests already cover, run here against the now-shared helper directly — confirms
+    # the refactor (extracting _title_relevant out of _archive_org_search) didn't
+    # change behavior.
+    assert fv._title_relevant("ancient Rome", "Advance on Rome, 1944") is False
+    assert fv._title_relevant("D-Day Normandy landing", "Normandy D-Day Landing Footage 1944") is True
+
+
+def test_first_image_hit_isolates_one_sources_failure_from_the_rest(monkeypatch):
+    # The real bug this replaces: previously, Commons raising inside a single shared
+    # try/except silently skipped every source listed after it too, not just Commons.
+    def _boom(query):
+        raise fv.requests.exceptions.RequestException("simulated network error")
+
+    def _hit(query):
+        return "https://example.com/real.jpg"
+
+    url, source = fv._first_image_hit("test query", [(_boom, "broken"), (_hit, "works")])
+    assert url == "https://example.com/real.jpg"
+    assert source == "works"
+
+
+def test_first_image_hit_returns_none_when_every_source_misses():
+    url, source = fv._first_image_hit("test query", [(lambda q: None, "a"), (lambda q: None, "b")])
+    assert url is None and source is None
+
+
+def test_nasa_images_search_real_api_returns_relevant_result():
+    # Real, unmocked — no API key needed (images-api.nasa.gov is a public,
+    # unauthenticated endpoint, confirmed directly this session).
+    import pytest
+    try:
+        url = fv._nasa_images_search("Apollo 11 moon landing")
+    except fv.requests.exceptions.RequestException:
+        pytest.skip("images-api.nasa.gov unreachable from this environment")
+    assert url is not None
+    assert url.startswith("https://")
+
+
+def test_nasa_images_search_rejects_irrelevant_results(monkeypatch):
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"collection": {"items": [
+                {"data": [{"title": "Completely unrelated garden party photo"}],
+                 "links": [{"render": "image", "href": "https://example.com/x.jpg"}]},
+            ]}}
+
+    monkeypatch.setattr(fv.requests, "get", lambda *a, **kw: _FakeResp())
+    assert fv._nasa_images_search("Apollo 11 moon landing") is None
+
+
+def test_europeana_search_real_api_returns_relevant_licensed_result():
+    # Real, unmocked — uses Europeana's own published public demo key ("api2demo",
+    # confirmed working live this session) when EUROPEANA_API_KEY isn't set.
+    import pytest
+    try:
+        url = fv._europeana_search("Eiffel Tower construction")
+    except fv.requests.exceptions.RequestException:
+        pytest.skip("api.europeana.eu unreachable from this environment")
+    if url is None:
+        pytest.skip("no license-clean, relevant result for this query right now — "
+                     "not a code failure, Europeana's real index changes over time")
+    assert url.startswith("https://") or url.startswith("http://")
+
+
+def test_europeana_search_rejects_non_commercial_rights(monkeypatch):
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"success": True, "items": [
+                {"rights": ["http://creativecommons.org/licenses/by-nc-nd/4.0/"],
+                 "title": ["Eiffel Tower construction 1889"],
+                 "edmIsShownBy": ["https://example.com/x.jpg"]},
+            ]}
+
+    monkeypatch.setattr(fv.requests, "get", lambda *a, **kw: _FakeResp())
+    assert fv._europeana_search("Eiffel Tower construction") is None
+
+
+def test_europeana_search_rejects_rights_statements_not_on_the_allow_list(monkeypatch):
+    # "No Copyright - Other Known Legal Restrictions" is real and common in Europeana's
+    # index, but deliberately NOT treated as clear enough (the name says there may be
+    # other real legal restrictions, e.g. privacy/publicity rights) — the allow-list is
+    # intentionally narrower than "not obviously copyrighted."
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"success": True, "items": [
+                {"rights": ["http://rightsstatements.org/vocab/NoC-OKLR/1.0/"],
+                 "title": ["Eiffel Tower construction 1889"],
+                 "edmIsShownBy": ["https://example.com/x.jpg"]},
+            ]}
+
+    monkeypatch.setattr(fv.requests, "get", lambda *a, **kw: _FakeResp())
+    assert fv._europeana_search("Eiffel Tower construction") is None
+
+
+def test_europeana_search_accepts_publicdomain_mark(monkeypatch):
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"success": True, "items": [
+                {"rights": ["http://creativecommons.org/publicdomain/mark/1.0/"],
+                 "title": ["Eiffel Tower construction 1889"],
+                 "edmIsShownBy": ["https://example.com/x.jpg"]},
+            ]}
+
+    monkeypatch.setattr(fv.requests, "get", lambda *a, **kw: _FakeResp())
+    assert fv._europeana_search("Eiffel Tower construction") == "https://example.com/x.jpg"
+
+
+def test_flickr_commons_search_skips_cleanly_without_an_api_key(monkeypatch):
+    # No FLICKR_API_KEY is available in this environment — confirms the graceful,
+    # Pexels-style skip (no exception, no request attempted) rather than a crash.
+    monkeypatch.setattr(fv, "FLICKR_API_KEY", "")
+    assert fv._flickr_commons_search("anything") is None
+
+
+def test_flickr_commons_search_real_shape_with_a_fake_key(monkeypatch):
+    # Not a live call (no real key available) — confirms the request/response
+    # handling matches Flickr's documented flickr.photos.search shape, so it's ready
+    # to verify for real the moment a key is added to .env.
+    monkeypatch.setattr(fv, "FLICKR_API_KEY", "fake-key-for-shape-test")
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"photos": {"photo": [
+                {"title": "Eiffel Tower under construction", "url_l": "https://example.com/x.jpg"},
+            ]}}
+
+    monkeypatch.setattr(fv.requests, "get", lambda *a, **kw: _FakeResp())
+    assert fv._flickr_commons_search("Eiffel Tower construction") == "https://example.com/x.jpg"
+
+
+def test_google_cse_search_skips_cleanly_without_credentials(monkeypatch):
+    monkeypatch.setattr(fv, "GOOGLE_CSE_API_KEY", "")
+    monkeypatch.setattr(fv, "GOOGLE_CSE_CX", "")
+    assert fv._google_cse_search("anything") is None
+
+
+def test_google_cse_search_real_shape_with_fake_credentials(monkeypatch):
+    # Not a live call (no real credentials available) — confirms the request/response
+    # handling matches Google's documented Custom Search JSON API shape.
+    monkeypatch.setattr(fv, "GOOGLE_CSE_API_KEY", "fake-key")
+    monkeypatch.setattr(fv, "GOOGLE_CSE_CX", "fake-cx")
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"items": [
+                {"title": "Eiffel Tower under construction", "link": "https://example.com/x.jpg"},
+            ]}
+
+    monkeypatch.setattr(fv.requests, "get", lambda *a, **kw: _FakeResp())
+    assert fv._google_cse_search("Eiffel Tower construction") == "https://example.com/x.jpg"

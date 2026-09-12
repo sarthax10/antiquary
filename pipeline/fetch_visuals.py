@@ -16,13 +16,22 @@ Ken Burns pan/zoom around an actual detected face instead of blind-cropping to c
 
 Source order:
 - entity_type == "person": Wikidata portrait (the P18 image claim on the Wikidata item
-  matching the query) -> Wikimedia Commons keyword search -> gradient placeholder.
-  Deliberately NO Pexels fallback here — Pexels is generic modern stock photography of
-  anonymous models, and using it to stand in for a specific named historical figure is
-  exactly the "random dude" problem this beat-level sourcing exists to avoid. An honest
+  matching the query) -> Wikimedia Commons keyword search -> Europeana -> Flickr
+  Commons -> Google Custom Search (license-filtered) -> gradient placeholder.
+  Deliberately NO Pexels/NASA fallback here — Pexels is generic modern stock
+  photography of anonymous models, and NASA's collection has no bearing on a person
+  portrait; using either to stand in for a specific named historical figure is exactly
+  the "random dude" problem this beat-level sourcing exists to avoid. An honest
   abstract placeholder is less misleading than the wrong face.
-- everything else: Pexels Video (real motion, needs PEXELS_API_KEY) -> Wikimedia Commons
-  image -> Pexels Photo (needs PEXELS_API_KEY) -> gradient placeholder.
+- everything else: Internet Archive (public-domain film, real footage preferred over
+  generic stock) -> Pexels Video (needs PEXELS_API_KEY) -> Wikimedia Commons image ->
+  NASA Images -> Europeana -> Flickr Commons -> Google Custom Search -> Pexels Photo
+  (needs PEXELS_API_KEY) -> gradient placeholder. Every source past Commons is real,
+  license-checked, and gracefully skipped (not a hard failure) when its own API key
+  isn't configured or it returns nothing relevant — see each source's own function for
+  its specific license-verification method (per-item rights metadata for Europeana/
+  Google CSE, agency-wide public-domain default for NASA, "no known restrictions" for
+  Flickr Commons specifically, not Flickr generally).
 """
 import math
 import os
@@ -204,6 +213,24 @@ def _archive_significant_words(text: str) -> set[str]:
     return {w for w in words if w not in _ARCHIVE_STOPWORDS and len(w) > 2}
 
 
+def _title_relevant(query: str, title: str) -> bool:
+    """Shared relevance gate — originally built for Internet Archive (see
+    _archive_org_search's own docstring for the real "ancient Rome" / "Advance on
+    Rome, 1944" false-positive story behind the exact threshold below), now reused by
+    every keyword-search-based source added since (NASA, Europeana, Flickr Commons,
+    Google Custom Search) since they all have the identical failure mode: a search
+    API's own relevance ranking is not a guarantee the top result is actually on
+    topic. MORE than half the query's own significant words must appear in the
+    candidate's title — deliberately strict (>) rather than >=, so a single shared
+    word in a 2-word query can't pass alone."""
+    query_words = _archive_significant_words(query)
+    if not query_words:
+        return False
+    title_words = _archive_significant_words(title)
+    overlap = query_words & title_words
+    return len(overlap) / len(query_words) > 0.5
+
+
 def _archive_org_search(query: str) -> str | None:
     """Internet Archive's public-domain film collections (Prelinger and others) — a
     real, legally clean source of historical footage (see Claude outputs/OPEN_ISSUES.md
@@ -234,20 +261,8 @@ def _archive_org_search(query: str) -> str | None:
     )
     resp.raise_for_status()
     docs = resp.json().get("response", {}).get("docs", [])
-    query_words = _archive_significant_words(query)
-    if not query_words:
-        return None
     for doc in docs:
-        title_words = _archive_significant_words(doc.get("title", ""))
-        overlap = query_words & title_words
-        # MORE than half the query's own significant words must show up in the title —
-        # deliberately strict (>) rather than >=: for a typical 2-word query like
-        # "ancient Rome", >= 0.5 would accept a single shared word ("rome") alone,
-        # exactly the "Advance on Rome, 1944" false positive this guards against (a
-        # real bug caught by this module's own test suite, not a hypothetical one).
-        # A strict majority instead requires both words of a 2-word query, or 3 of 4
-        # for a longer one — a real, if still imperfect, relevance bar.
-        if len(overlap) / len(query_words) > 0.5:
+        if _title_relevant(query, doc.get("title", "")):
             return doc.get("identifier")
     return None
 
@@ -267,6 +282,158 @@ def _archive_org_video_url(identifier: str) -> str | None:
     if not chosen:
         return None
     return f"https://archive.org/download/{identifier}/{chosen['name']}"
+
+
+# --- NASA Image and Video Library --------------------------------------------------
+# No API key required (images-api.nasa.gov is a public, unauthenticated endpoint —
+# confirmed with a real request during this session). NASA's own media usage
+# guidelines: NASA content is generally not copyrighted unless explicitly noted on an
+# individual item — genuinely free, no per-item license check needed the way
+# Commons/Europeana/Flickr require, since the agency-wide default already clears the
+# bar. Narrow but strong fit specifically for space/aeronautics/science topics.
+NASA_IMAGES_API = "https://images-api.nasa.gov/search"
+
+
+def _nasa_images_search(query: str) -> str | None:
+    resp = requests.get(
+        NASA_IMAGES_API, headers=HEADERS,
+        params={"q": query, "media_type": "image"}, timeout=20,
+    )
+    resp.raise_for_status()
+    items = resp.json().get("collection", {}).get("items", [])
+    for item in items[:8]:
+        data = (item.get("data") or [{}])[0]
+        if not _title_relevant(query, data.get("title", "")):
+            continue
+        links = item.get("links") or []
+        image_link = next((l["href"] for l in links if l.get("render") == "image"), None)
+        if image_link:
+            return image_link
+    return None
+
+
+# --- Europeana -----------------------------------------------------------------------
+# Aggregates many European museum/archive/library collections behind one real API.
+# Per-item `rights` metadata is present and MUST be checked per item (confirmed via a
+# real query during this session: results genuinely mix CC0/public-domain items with
+# CC-BY-NC-ND and outright "In Copyright" ones in the same result set) — same
+# discipline as Commons, nothing here is assumed clean just because it's in the index.
+# Uses Europeana's own published public demo key ("api2demo", confirmed working
+# live this session) when EUROPEANA_API_KEY isn't set — the demo key is real and
+# usable, but shared/rate-limited; register a free key at apis.europeana.eu for
+# reliable production use (documented in .env.example).
+EUROPEANA_API = "https://api.europeana.eu/record/v2/search.json"
+EUROPEANA_API_KEY = os.environ.get("EUROPEANA_API_KEY") or "api2demo"
+
+# Rights values that clear a real commercial-use bar — public domain / CC0 / CC-BY /
+# CC-BY-SA. Deliberately excludes anything "In Copyright" (rightsstatements.org's
+# InC-* codes) and any Creative Commons variant carrying NC (non-commercial) or ND
+# (no-derivatives), since Ken Burns pan/zoom + color grading + captions IS a
+# derivative work, and this project's own generated videos aren't non-commercial use.
+_EUROPEANA_ALLOWED_RIGHTS = (
+    "publicdomain/mark", "publicdomain/zero", "cc0",
+    "/by/", "/by-sa/",
+)
+
+
+def _europeana_search(query: str) -> str | None:
+    resp = requests.get(
+        EUROPEANA_API, headers=HEADERS,
+        params={
+            "wskey": EUROPEANA_API_KEY, "query": query,
+            "media": "true", "qf": "TYPE:IMAGE", "rows": 8,
+        },
+        timeout=20,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    if not body.get("success"):
+        return None
+    for item in body.get("items", []):
+        rights = " ".join(item.get("rights") or []).lower()
+        if not any(allowed in rights for allowed in _EUROPEANA_ALLOWED_RIGHTS):
+            continue
+        title = " ".join(item.get("title") or [])
+        if not _title_relevant(query, title):
+            continue
+        image_url = item.get("edmIsShownBy") or item.get("edmPreview")
+        if image_url:
+            return image_url[0] if isinstance(image_url, list) else image_url
+    return None
+
+
+# --- Flickr Commons ------------------------------------------------------------------
+# "The Commons" — institutional archives (Library of Congress, Smithsonian, national
+# archives, etc.) that explicitly upload to Flickr under "no known copyright
+# restrictions." Needs a real, free API key (instant self-service signup at
+# flickr.com/services/api) — FLICKR_API_KEY absent means this source is silently
+# skipped, same graceful-degradation convention as Pexels. NOT live-verified against
+# the real API this session (no key available) — implemented against Flickr's
+# documented flickr.photos.search response shape; verify with a real key before
+# trusting it in production, per this project's own "verify against the real stack"
+# rule.
+FLICKR_API = "https://api.flickr.com/services/rest/"
+FLICKR_API_KEY = os.environ.get("FLICKR_API_KEY", "")
+
+
+def _flickr_commons_search(query: str) -> str | None:
+    if not FLICKR_API_KEY:
+        return None
+    resp = requests.get(
+        FLICKR_API, headers=HEADERS,
+        params={
+            "method": "flickr.photos.search", "api_key": FLICKR_API_KEY,
+            "text": query, "is_commons": "1", "media": "photos",
+            "extras": "url_l,url_c,owner_name", "per_page": 8, "format": "json",
+            "nojsoncallback": "1",
+        },
+        timeout=20,
+    )
+    resp.raise_for_status()
+    photos = resp.json().get("photos", {}).get("photo", [])
+    for photo in photos:
+        if not _title_relevant(query, photo.get("title", "")):
+            continue
+        image_url = photo.get("url_l") or photo.get("url_c")
+        if image_url:
+            return image_url
+    return None
+
+
+# --- Google Custom Search (license-filtered image search) ----------------------------
+# The legitimate version of "search Google Images": Google's Custom Search JSON API
+# supports a `rights` parameter that filters results to actually-licensed images
+# (public domain / CC variants) instead of returning arbitrary copyrighted web
+# images with no reuse rights, which raw Google Images results would be. Needs both
+# GOOGLE_CSE_API_KEY and GOOGLE_CSE_CX (a Custom Search Engine ID configured to
+# search the entire web) — free tier is 100 queries/day, paid beyond that. Neither
+# credential is available in this environment, so — like Flickr above — this is
+# real, documented-API-shaped code, not yet exercised against a live response.
+GOOGLE_CSE_API = "https://www.googleapis.com/customsearch/v1"
+GOOGLE_CSE_API_KEY = os.environ.get("GOOGLE_CSE_API_KEY", "")
+GOOGLE_CSE_CX = os.environ.get("GOOGLE_CSE_CX", "")
+
+
+def _google_cse_search(query: str) -> str | None:
+    if not (GOOGLE_CSE_API_KEY and GOOGLE_CSE_CX):
+        return None
+    resp = requests.get(
+        GOOGLE_CSE_API, headers=HEADERS,
+        params={
+            "key": GOOGLE_CSE_API_KEY, "cx": GOOGLE_CSE_CX, "q": query,
+            "searchType": "image", "rights": "cc_publicdomain|cc_attribute|cc_sharealike",
+            "num": 8, "safe": "active",
+        },
+        timeout=20,
+    )
+    resp.raise_for_status()
+    items = resp.json().get("items", [])
+    for item in items:
+        if not _title_relevant(query, item.get("title", "")):
+            continue
+        if item.get("link"):
+            return item["link"]
+    return None
 
 
 def _pexels_video_search(query: str) -> str | None:
@@ -452,6 +619,23 @@ def _save_image(url: str, out_base: Path, source: str, entity_type: str) -> dict
     return {"path": path, "source": source, "entity_type": entity_type, "face": _face_or_portrait_fallback(path, entity_type)}
 
 
+def _first_image_hit(query: str, sources: list[tuple]) -> tuple[str | None, str | None]:
+    """Tries each (search_fn, source_name) pair in order, isolating each source's own
+    network/API failure so one source's hiccup doesn't skip every source after it — a
+    real latent bug the single shared try/except this replaces had: previously,
+    Commons raising a RequestException silently skipped Pexels photo too, not just
+    Commons, since both sat inside one try block. Each source here fails independently
+    instead."""
+    for search_fn, source_name in sources:
+        try:
+            image_url = search_fn(query)
+        except requests.exceptions.RequestException:
+            continue
+        if image_url:
+            return image_url, source_name
+    return None, None
+
+
 def _fetch_person(query: str, out_base: Path, seed: int, entity_type: str) -> dict:
     try:
         portrait_url = _wikidata_portrait(query)
@@ -471,6 +655,23 @@ def _fetch_person(query: str, out_base: Path, seed: int, entity_type: str) -> di
             asset = _save_image(image_url, out_base, "commons", entity_type)
             if asset:
                 return asset
+
+    # Beyond Wikidata/Commons: real, license-checked general-purpose image search —
+    # deliberately NOT Pexels here either (see this function's own header comment on
+    # why: generic modern-stock photography of anonymous models is the wrong fallback
+    # for a NAMED historical figure). Europeana/Flickr Commons/Google CSE can
+    # plausibly surface an actual portrait Commons' own search missed; NASA is
+    # intentionally excluded here (space-agency imagery has no bearing on a person
+    # portrait search).
+    image_url, source = _first_image_hit(query, [
+        (_europeana_search, "europeana"),
+        (_flickr_commons_search, "flickr_commons"),
+        (_google_cse_search, "google_cse"),
+    ])
+    if image_url:
+        asset = _save_image(image_url, out_base, source, entity_type)
+        if asset:
+            return asset
 
     path = out_base.with_suffix(".mp4")
     _placeholder_clip(path, seed)
@@ -507,14 +708,18 @@ def _fetch_generic(query: str, out_base: Path, seed: int, entity_type: str) -> d
             path.write_bytes(content)
             return {"path": path, "source": "video", "entity_type": entity_type, "face": None}
 
-    try:
-        image_url = _commons_search(query)
-        source = "commons"
-        if not image_url:
-            image_url = _pexels_photo_search(query)
-            source = "pexels_photo"
-    except requests.exceptions.RequestException:
-        image_url, source = None, None
+    # Real archival/institutional sources tried before generic modern stock — the same
+    # visual-evidence-hierarchy reasoning as the Internet Archive section above
+    # (primary/archival evidence belongs ahead of anonymous stock of the same
+    # subject). Pexels photo stays last resort, not removed.
+    image_url, source = _first_image_hit(query, [
+        (_commons_search, "commons"),
+        (_nasa_images_search, "nasa"),
+        (_europeana_search, "europeana"),
+        (_flickr_commons_search, "flickr_commons"),
+        (_google_cse_search, "google_cse"),
+        (_pexels_photo_search, "pexels_photo"),
+    ])
     if image_url:
         asset = _save_image(image_url, out_base, source, entity_type)
         if asset:
