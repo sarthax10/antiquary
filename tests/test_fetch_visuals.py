@@ -102,3 +102,52 @@ def test_face_or_portrait_fallback_prefers_a_real_detected_face(tmp_path, monkey
     monkeypatch.setattr(fv, "_detect_face_center", lambda path: [0.42, 0.5])
     result = fv._face_or_portrait_fallback(_blank_image(tmp_path), "person")
     assert result == [0.42, 0.5]
+
+
+# --- Illustrated visual style (genre-strategy fork, see OPEN_ISSUES.md #56 and
+# PROFESSIONAL_QUALITY_ROADMAP.md §7 item 12) --------------------------------------
+
+def test_illustrated_seed_biases_person_beats_warm():
+    for i in range(6):
+        assert fv._illustrated_seed(i, "person") in fv._WARM_PALETTE_INDICES
+
+
+def test_illustrated_seed_biases_non_person_beats_cool():
+    for entity_type in ("place", "event", "scene"):
+        for i in range(6):
+            assert fv._illustrated_seed(i, entity_type) in fv._COOL_PALETTE_INDICES
+
+
+def test_illustrated_seed_varies_across_consecutive_beats_of_the_same_type():
+    seeds = [fv._illustrated_seed(i, "person") for i in range(3)]
+    assert len(set(seeds)) > 1  # not stuck on one palette for a whole video
+
+
+def test_fetch_one_illustrated_style_never_calls_real_sourcing(tmp_path, monkeypatch):
+    # Real network calls would fail/hang in a test environment anyway, but the actual
+    # point being verified is behavioral: illustrated mode must not even attempt
+    # Wikidata/Commons/Pexels sourcing, not just tolerate them failing.
+    def _boom(*a, **kw):
+        raise AssertionError("illustrated style must not call real sourcing")
+
+    monkeypatch.setattr(fv, "_fetch_person", _boom)
+    monkeypatch.setattr(fv, "_fetch_generic", _boom)
+
+    beat = {"visual_query": "irrelevant", "entity_type": "person"}
+    asset = fv.fetch_one(beat, tmp_path / "img_00", seed=0, style="illustrated")
+    assert asset["source"] == "illustrated"
+    assert asset["entity_type"] == "person"
+    assert asset["face"] is None
+    assert Path(asset["path"]).suffix == ".mp4"
+    assert Path(asset["path"]).exists()
+
+
+def test_fetch_one_photographic_style_is_the_default_and_unchanged(monkeypatch, tmp_path):
+    # style defaults to "photographic" when not passed at all -- existing callers/tests
+    # (and the real photographic pipeline) must be unaffected by this feature's addition.
+    called = {}
+    monkeypatch.setattr(fv, "_fetch_generic", lambda *a, **kw: called.setdefault("hit", True) or
+                         {"path": tmp_path / "x.mp4", "source": "video", "entity_type": "scene", "face": None})
+    beat = {"visual_query": "a river", "entity_type": "scene"}
+    fv.fetch_one(beat, tmp_path / "img_00", seed=0)
+    assert called.get("hit") is True

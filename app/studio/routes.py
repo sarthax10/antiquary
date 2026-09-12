@@ -6,7 +6,7 @@ from flask_login import current_user
 from app import storage
 from app.auth.decorators import approved_required
 from app.generation import job_manager
-from app.models import VALID_STORY_STATUSES, Story
+from app.models import VALID_STORY_STATUSES, VALID_VISUAL_STYLES, Story
 
 from . import service
 
@@ -24,6 +24,7 @@ def _story_json(story: Story, include_video_url: bool = False) -> dict:
         "needs_human_review": story.needs_human_review,
         "status": story.status,
         "topic": story.topic,
+        "visual_style": story.visual_style,
         "duration_seconds": story.duration_seconds,
         "created_at": story.created_at.isoformat() if story.created_at else None,
         "decided_at": story.decided_at.isoformat() if story.decided_at else None,
@@ -112,7 +113,10 @@ def restore_story(story_id):
 def generate():
     data = request.get_json(silent=True) or {}
     topic = (data.get("topic") or "").strip()
-    started, message = job_manager.start(topic, user=current_user)
+    visual_style = (data.get("visual_style") or "photographic").strip()
+    if visual_style not in VALID_VISUAL_STYLES:
+        return jsonify(error=f"visual_style must be one of {VALID_VISUAL_STYLES}"), 400
+    started, message = job_manager.start(topic, user=current_user, visual_style=visual_style)
     return jsonify(started=started, message=message)
 
 

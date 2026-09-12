@@ -1256,3 +1256,48 @@ Also worth checking (not yet done): why this specific beat fell through the enti
 Wikidata → Commons → Pexels waterfall in `fetch_visuals.py` to begin with — #12's
 "descriptor-strip-list gaps" root cause may need another look at whatever query this
 beat generated, alongside building the better fallback itself.
+
+## 57. Genre-strategy fork resolved — "photographic" vs. "illustrated", both real, user picks
+
+**Status: VERIFIED — a real product feature, not a code-only decision**
+
+`PROFESSIONAL_QUALITY_ROADMAP.md` §7 item 12 flagged a genuine strategic fork rather than
+picking silently: keep chasing photorealistic-documentary credibility with
+uncontrollable-quality stock sourcing, or lean into a Kurzgesagt-style illustrated/
+motion-graphics register that sidesteps the sourcing problem for the beats it covers.
+The user's explicit answer: **keep both, let whoever is generating a video choose** — not
+a hypothetical toggle, a real one, per this project's own "no fake advanced settings"
+rule (see CLAUDE.md).
+
+**What "illustrated" actually is, honestly**: not AI-generated illustration (no image-gen
+model is in this stack, and adding one would be a large, out-of-scope dependency) — it
+reuses the already-verified animated graphic backdrop (`_placeholder_clip`, #16) for
+*every* beat instead of only on a sourcing failure, with palette now biased by
+`entity_type` (warm ember/wine/brass for "person" beats, cool teal/olive/indigo for
+everything else — 3 new palettes added, 6 total) so a whole video doesn't repeat the same
+2-3 looks. Motion graphics, captions and sound design carry the video in this mode, no
+stock photos are fetched at all (zero network calls, faster and immune to sourcing
+misses). "Photographic" is the original approach, completely unchanged.
+
+**Full-stack, threaded through every layer**: `generation_jobs.visual_style` and
+`stories.visual_style` (new migration `3f8c1a9d2b47`, downgrade/upgrade round-trip
+verified against the real local Postgres) → `job_manager.start()`/`_spawn()` → the
+`run_pipeline.py` subprocess argv → `fetch_visuals.fetch_all(..., style=...)` and
+`enqueue_story.enqueue(..., visual_style=...)` (persisted per-story for a future editor
+re-render to stay consistent) → `POST /api/generate` (validated against
+`VALID_VISUAL_STYLES`, 400 on anything else) → a real Create-screen control (not a stub —
+moved *out* of the "coming soon" note per CLAUDE.md's own rule for exactly this
+situation), a segmented radiogroup remembering the last choice via localStorage.
+
+**Verified, not assumed**: 9 new unit tests (`tests/test_fetch_visuals.py`) covering the
+palette bias, per-beat variation, and — the actually load-bearing behavioral guarantee —
+that illustrated style never calls the real sourcing functions at all (not just "tolerates
+them failing"); a real end-to-end run of `fetch_visuals.fetch_all(style="illustrated")`
+feeding directly into `render.render()` (real ffmpeg, both cue types from #18 still firing
+correctly, mood music from the earlier session work still selecting correctly) producing
+a valid 1080x1920 video with audio; the migration's up/down/up round-trip against the
+real DB; and a full live-browser pass — typed a prompt, picked "Illustrated", submitted,
+confirmed via direct `psql` against the real `generation_jobs` table that the new row
+actually persisted `visual_style='illustrated'` (and that older rows correctly backfilled
+to `'photographic'`), then cancelled the job cleanly. Full backend suite: 95/95 pass.
+Frontend production build succeeds clean.

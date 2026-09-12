@@ -42,6 +42,12 @@ class Story(Base):
     needs_human_review = Column(Boolean, nullable=False, default=True)
     status = Column(String(16), nullable=False, default="pending", index=True)
     topic = Column(String(500), nullable=False, default="")
+    # "photographic" (real sourced imagery) or "illustrated" (motion-graphics-forward,
+    # no photographic sourcing at all) — see app.models.generation_job.VALID_VISUAL_STYLES
+    # and PROFESSIONAL_QUALITY_ROADMAP.md §7 item 12. Persisted per-story (not just on the
+    # transient GenerationJob row) so a future editor re-render stays visually consistent
+    # with how the video was originally generated.
+    visual_style = Column(String(20), nullable=False, default="photographic")
     duration_seconds = Column(Float, nullable=True)
     video_object_key = Column(String(300), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

@@ -32,7 +32,7 @@ from pathlib import Path
 from sqlalchemy.exc import IntegrityError
 
 from app.db import get_session
-from app.models import GenerationJob, utcnow
+from app.models import VALID_VISUAL_STYLES, GenerationJob, utcnow
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 PIPELINE_DIR = REPO_ROOT / "pipeline"
@@ -93,6 +93,7 @@ def _job_json(job: GenerationJob | None, queue_length: int = 0, queue_position: 
     return {
         "status": job.status,
         "topic": job.topic,
+        "visual_style": job.visual_style,
         "pid": job.pid,
         "stage": job.stage,
         "started_at": job.started_at.timestamp() if job.started_at else None,
@@ -115,7 +116,7 @@ def _spawn(job: GenerationJob) -> None:
     if job.user_id is not None:
         env["GENERATION_USER_ID"] = str(job.user_id)
     proc = subprocess.Popen(
-        [sys.executable, "run_pipeline.py", job.topic],
+        [sys.executable, "run_pipeline.py", job.topic, job.visual_style],
         cwd=str(PIPELINE_DIR),
         stdout=log_fh,
         stderr=subprocess.STDOUT,
@@ -237,12 +238,19 @@ def _watch(proc: subprocess.Popen, job_id: int) -> None:
         db.remove_session()
 
 
-def start(topic: str, user) -> tuple[bool, str]:
+def start(topic: str, user, visual_style: str = "photographic") -> tuple[bool, str]:
     """Returns (started, message). Enqueues (status="queued") instead of refusing when a
     generation is already running — get_status() promotes the oldest queued job once
     nothing is. Refuses only if this same user already has a running or queued job of
-    their own (one at a time per user, not one at a time globally-with-no-queue)."""
+    their own (one at a time per user, not one at a time globally-with-no-queue).
+
+    visual_style: falls back to "photographic" for anything not in VALID_VISUAL_STYLES —
+    defensive, since the real validation belongs at the route boundary (app/studio/
+    routes.py), not here; this is just a last-resort guard against a bad value ever
+    reaching the pipeline subprocess."""
     global _current_proc
+    if visual_style not in VALID_VISUAL_STYLES:
+        visual_style = "photographic"
     with _lock:
         session = get_session()
         if user is not None:
@@ -259,7 +267,10 @@ def start(topic: str, user) -> tuple[bool, str]:
         # earlier queued one that just hasn't been promoted by get_status() yet (e.g.
         # nobody has polled status since the previous job finished).
         blocked = _running_job() is not None or bool(_queued_jobs())
-        job = GenerationJob(user_id=user.id if user else None, topic=topic, status="queued" if blocked else "running")
+        job = GenerationJob(
+            user_id=user.id if user else None, topic=topic, visual_style=visual_style,
+            status="queued" if blocked else "running",
+        )
         session.add(job)
         try:
             session.commit()  # need job.id before spawning, so the subprocess can report to it
@@ -267,7 +278,7 @@ def start(topic: str, user) -> tuple[bool, str]:
             # Lost a race with another request that started running first (defense in
             # depth — with gunicorn's single worker this shouldn't actually happen).
             session.rollback()
-            job = GenerationJob(user_id=user.id if user else None, topic=topic, status="queued")
+            job = GenerationJob(user_id=user.id if user else None, topic=topic, visual_style=visual_style, status="queued")
             session.add(job)
             session.commit()
 

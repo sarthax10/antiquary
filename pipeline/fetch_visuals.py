@@ -275,7 +275,16 @@ PLACEHOLDER_PALETTE = [
     ((70, 45, 30), (18, 14, 20)),   # warm ember core -> near-black edge
     ((30, 45, 55), (12, 14, 22)),   # cool teal core -> near-black edge
     ((55, 30, 40), (16, 12, 18)),   # muted wine core -> near-black edge
+    ((45, 55, 35), (14, 18, 12)),   # muted olive/moss core -> near-black edge
+    ((35, 35, 60), (12, 12, 20)),   # deep indigo core -> near-black edge
+    ((60, 50, 25), (20, 16, 10)),   # aged brass/sepia core -> near-black edge
 ]
+
+# Warm palettes (ember/wine/brass) read as "human" and cool ones (teal/olive/indigo) as
+# "place/time" — a deliberate, not arbitrary, split used to bias illustrated-mode's
+# palette choice by entity_type (see _illustrated_seed) rather than picking blind.
+_WARM_PALETTE_INDICES = (0, 2, 5)
+_COOL_PALETTE_INDICES = (1, 3, 4)
 
 
 def _placeholder_clip(out_path: Path, seed: int, duration: float = 4.0, fps: int = 30) -> None:
@@ -413,24 +422,56 @@ def _fetch_generic(query: str, out_base: Path, seed: int, entity_type: str) -> d
     return {"path": path, "source": "placeholder", "entity_type": entity_type, "face": None}
 
 
-def fetch_one(beat: dict, out_base: Path, seed: int) -> dict:
-    """Returns {"path": Path, "source": str, "entity_type": str, "face": [fx,fy]|None}."""
-    query = beat["visual_query"]
+def _illustrated_seed(index: int, entity_type: str) -> int:
+    """Picks a PLACEHOLDER_PALETTE index for illustrated-mode's graphic backdrop —
+    biased warm for "person" beats, cool for everything else (see the palette-index
+    comment above), with the beat's own position mixed in so consecutive beats of the
+    same entity_type still get visibly different palettes rather than repeating."""
+    bucket = _WARM_PALETTE_INDICES if entity_type == "person" else _COOL_PALETTE_INDICES
+    return bucket[index % len(bucket)]
+
+
+def _fetch_illustrated(out_base: Path, seed: int, entity_type: str) -> dict:
+    """Style == "illustrated" (see Claude outputs/OPEN_ISSUES.md #56 and
+    PROFESSIONAL_QUALITY_ROADMAP.md §7 item 12's genre-strategy question — the user's
+    answer was to keep *both* the photographic-documentary approach and a motion-
+    graphics-forward one, and let the person generating a video choose). Every beat gets
+    the same animated graphic backdrop already used as photographic mode's honest,
+    verified fallback (_placeholder_clip — see #16) instead of attempting photographic
+    stock sourcing at all: no Wikidata/Commons/Pexels calls, no risk of a mismatched or
+    low-quality stock result, and full control over the visual language (motion
+    graphics + kinetic typography carry the video, matching Kurzgesagt's own
+    illustrated register rather than chasing photorealism with uncontrollable source
+    quality). Distinct `source` value ("illustrated") from a genuine sourcing-failure
+    placeholder ("placeholder") so the two remain distinguishable in logs/debugging."""
+    path = out_base.with_suffix(".mp4")
+    _placeholder_clip(path, _illustrated_seed(seed, entity_type))
+    return {"path": path, "source": "illustrated", "entity_type": entity_type, "face": None}
+
+
+def fetch_one(beat: dict, out_base: Path, seed: int, style: str = "photographic") -> dict:
+    """Returns {"path": Path, "source": str, "entity_type": str, "face": [fx,fy]|None}.
+    style: "photographic" (default — real sourced imagery/stock, unchanged behavior) or
+    "illustrated" (see _fetch_illustrated)."""
     entity_type = beat.get("entity_type", "scene")
+    if style == "illustrated":
+        return _fetch_illustrated(out_base, seed, entity_type)
+    query = beat["visual_query"]
     if entity_type == "person":
         return _fetch_person(query, out_base, seed, entity_type)
     return _fetch_generic(query, out_base, seed, entity_type)
 
 
-def fetch_all(out_dir: str, beats: list[dict]) -> list[dict]:
+def fetch_all(out_dir: str, beats: list[dict], style: str = "photographic") -> list[dict]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     assets = []
     for i, beat in enumerate(beats):
-        if i > 0:
-            time.sleep(0.8)  # be a polite API citizen, avoid rate limits
+        if i > 0 and style != "illustrated":
+            time.sleep(0.8)  # be a polite API citizen, avoid rate limits — no external
+            # calls happen in illustrated mode, so there's nothing to be polite to.
         base = out / f"img_{i:02d}"
-        asset = fetch_one(beat, base, i)
+        asset = fetch_one(beat, base, i, style=style)
         print(f"[{asset['source']}] {beat['visual_query']!r} ({asset['entity_type']}) -> {asset['path']}", file=sys.stderr)
         asset["path"] = str(asset["path"])
         assets.append(asset)

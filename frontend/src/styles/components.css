@@ -301,9 +301,11 @@
   transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast);
 }
 .segmented button:hover { color: var(--ink); }
-.segmented button[aria-selected="true"] { background: var(--surface-3); color: var(--ink); box-shadow: inset 0 1px 0 rgba(255,248,232,0.04), 0 1px 2px rgba(0,0,0,0.4); }
+/* aria-selected: tab-pattern usage (a view filter). aria-checked: radio-pattern usage
+   (a persistent setting, e.g. Create's visual-style choice) — same look either way. */
+.segmented button[aria-selected="true"], .segmented button[aria-checked="true"] { background: var(--surface-3); color: var(--ink); box-shadow: inset 0 1px 0 rgba(255,248,232,0.04), 0 1px 2px rgba(0,0,0,0.4); }
 .segmented .count { font-family: var(--font-mono); font-size: 11px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
-.segmented button[aria-selected="true"] .count { color: var(--ink-2); }
+.segmented button[aria-selected="true"] .count, .segmented button[aria-checked="true"] .count { color: var(--ink-2); }
 
 /* ---- Skeletons ----------------------------------------------------------- */
 .skeleton {

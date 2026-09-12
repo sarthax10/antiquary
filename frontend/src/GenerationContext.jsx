@@ -115,8 +115,8 @@ export function GenerationProvider({ children }) {
   }, [enabled, refresh, status?.status]);
 
   const start = useCallback(
-    async (topic) => {
-      const res = await studioApi.startGeneration(topic);
+    async (topic, visualStyle) => {
+      const res = await studioApi.startGeneration(topic, visualStyle);
       await refresh();
       return res;
     },

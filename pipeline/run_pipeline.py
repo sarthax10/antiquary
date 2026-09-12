@@ -129,7 +129,7 @@ def _cap_parallel(beats: list[dict], assets: list[dict], beat_audio: list[dict],
     return beats[:max_clips], assets[:max_clips], kept_audio
 
 
-def run(topic: str) -> str:
+def run(topic: str, visual_style: str = "photographic") -> str:
     run_id = uuid.uuid4().hex[:10]
     work_dir = BASE_DIR / "media" / "tmp" / run_id
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -140,7 +140,7 @@ def run(topic: str) -> str:
 
         job_manager.set_stage("sourcing_visuals")
         visuals_dir = work_dir / "visuals"
-        assets = fetch_visuals.fetch_all(str(visuals_dir), script["beats"])
+        assets = fetch_visuals.fetch_all(str(visuals_dir), script["beats"], style=visual_style)
 
         job_manager.set_stage("recording_narration")
         voice = tts.pick_voice()
@@ -189,7 +189,8 @@ def run(topic: str) -> str:
         ]
 
         return enqueue_story.enqueue(
-            str(video_path), str(script_path), topic, timeline=story_timeline, clip_files=clip_files
+            str(video_path), str(script_path), topic, timeline=story_timeline,
+            clip_files=clip_files, visual_style=visual_style,
         )
     finally:
         # Every generation's work dir (source images/clips, per-beat audio, the .ass
@@ -202,4 +203,5 @@ def run(topic: str) -> str:
 
 if __name__ == "__main__":
     topic = sys.argv[1] if len(sys.argv) > 1 else ""
-    print(run(topic))
+    visual_style = sys.argv[2] if len(sys.argv) > 2 else "photographic"
+    print(run(topic, visual_style))

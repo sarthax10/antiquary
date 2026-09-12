@@ -73,6 +73,7 @@ def enqueue(
     topic: str = "",
     timeline: dict | None = None,
     clip_files: list[dict] | None = None,
+    visual_style: str = "photographic",
 ) -> str:
     script = json.loads(open(script_json_path).read())
     duration = _probe_duration(video_path)
@@ -100,6 +101,7 @@ def enqueue(
         needs_human_review=script.get("needs_human_review", True),
         status="pending",
         topic=topic,
+        visual_style=visual_style,
         duration_seconds=duration,
         created_by_id=user_id,
     )

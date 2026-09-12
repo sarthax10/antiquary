@@ -4,7 +4,7 @@ import * as studioApi from "../api/studio";
 import { STAGES, stageIndex, useGeneration } from "../GenerationContext";
 import { useToast } from "../ToastContext";
 import { StageSegments } from "../components/GenerationIndicator";
-import { IconAlert, IconArrowRight, IconCheck, IconClock, IconInfo, IconShuffle, IconSparkle, IconStop, IconX } from "../components/icons";
+import { IconAlert, IconArrowRight, IconCheck, IconClock, IconFilm, IconInfo, IconLayers, IconShuffle, IconSparkle, IconStop, IconX } from "../components/icons";
 import StoryPoster, { PosterSkeleton } from "../components/StoryPoster";
 import StoryPreviewModal from "../components/StoryPreviewModal";
 import { Button, Callout, ConfirmDialog, ErrorState, Kbd } from "../components/ui";
@@ -25,6 +25,14 @@ const SUGGESTIONS = [
   "A tiny decision that changed a war",
 ];
 
+// The genre-strategy fork (see Claude outputs/PROFESSIONAL_QUALITY_ROADMAP.md §7 item
+// 12): both are real, fully-supported pipeline paths, not one "real" default and one
+// stub — the person generating a story picks which register fits it.
+const VISUAL_STYLES = [
+  { key: "photographic", label: "Photographic", icon: IconFilm, description: "Real sourced imagery — portraits, archive photos, footage." },
+  { key: "illustrated", label: "Illustrated", icon: IconLayers, description: "Animated graphic backdrops carried by motion graphics and captions, no stock photos." },
+];
+
 function useDismissed(key) {
   const [dismissed, setDismissed] = useState(() => (key ? safeStorage.get(`antiquary:dismissed:${key}`) === "1" : false));
   useEffect(() => {
@@ -42,10 +50,16 @@ function Composer({ onStarted }) {
   const { toast } = useToast();
   const location = useLocation();
   const [topic, setTopic] = useState("");
+  const [visualStyle, setVisualStyle] = useState(() => safeStorage.get("antiquary:visual-style") || "photographic");
   const [submitting, setSubmitting] = useState(false);
   const ref = useRef(null);
   const trimmed = topic.trim();
   const remaining = MAX_TOPIC - topic.length;
+
+  function chooseStyle(key) {
+    setVisualStyle(key);
+    safeStorage.set("antiquary:visual-style", key);
+  }
 
   useEffect(() => {
     const el = ref.current;
@@ -74,7 +88,7 @@ function Composer({ onStarted }) {
     requestNotificationPermission();
     setSubmitting(true);
     try {
-      const res = await start(trimmed);
+      const res = await start(trimmed, visualStyle);
       if (res?.started === false) {
         toast({ tone: "error", title: "Couldn’t start a new story", description: res.message || "A generation is already running." });
       } else {
@@ -115,6 +129,39 @@ function Composer({ onStarted }) {
         ))}
       </div>
 
+      <div className="composer-style">
+        <span className="label" id="visual-style-label">Visual style</span>
+        <div
+          className="segmented"
+          role="radiogroup"
+          aria-labelledby="visual-style-label"
+          onKeyDown={(e) => {
+            if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+            const i = VISUAL_STYLES.findIndex((s) => s.key === visualStyle);
+            const next = VISUAL_STYLES[(i + (e.key === "ArrowRight" ? 1 : VISUAL_STYLES.length - 1)) % VISUAL_STYLES.length];
+            chooseStyle(next.key);
+            e.currentTarget.querySelector(`#style-${next.key}`)?.focus();
+          }}
+        >
+          {VISUAL_STYLES.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              id={`style-${key}`}
+              type="button"
+              role="radio"
+              aria-checked={visualStyle === key}
+              tabIndex={visualStyle === key ? 0 : -1}
+              onClick={() => chooseStyle(key)}
+            >
+              <Icon aria-hidden="true" /> {label}
+            </button>
+          ))}
+        </div>
+        <p className="muted" style={{ fontSize: "var(--text-xs)", marginTop: 6 }}>
+          {VISUAL_STYLES.find((s) => s.key === visualStyle)?.description}
+        </p>
+      </div>
+
       <div className="composer-foot">
         <p id="topic-help" className="composer-specs meta">
           <span>≈ 30–45 s</span>
@@ -130,7 +177,7 @@ function Composer({ onStarted }) {
         </div>
       </div>
       <p className="composer-note">
-        <IconInfo /> Voice, pacing and visual style controls are coming soon — for now every story uses the studio defaults.
+        <IconInfo /> Voice and pacing controls are coming soon — for now every story uses the studio defaults.
       </p>
     </form>
   );
