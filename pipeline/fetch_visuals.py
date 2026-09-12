@@ -245,6 +245,32 @@ def _detect_face_center(image_path: Path) -> list[float] | None:
         return None
 
 
+# A framing GUESS, not a genuine detection — used only when _detect_face_center() fails
+# on a "person" beat. haarcascade_frontalface_default is trained on real frontal photos;
+# named historical figures sourced via Wikidata P18/Commons are overwhelmingly
+# pre-photography imagery — paintings, engravings, coins, marble busts — where detection
+# failing is the common case, not the rare one (see OPEN_ISSUES.md audit #35). Falling
+# back to a dead-center crop in that case is a worse default than this: the vast majority
+# of single-subject portrait/bust compositions place the head in the upper third of the
+# frame, not centered, so biasing the Ken Burns crop upward reads as a considered
+# portrait crop instead of a generic thumbnail center-crop.
+PORTRAIT_FALLBACK_CENTER = (0.5, 0.35)
+
+
+def _face_or_portrait_fallback(image_path: Path, entity_type: str) -> list[float] | None:
+    """_detect_face_center()'s result when it finds one; otherwise, for a "person" beat
+    specifically, the documented upper-third framing guess above rather than leaving
+    render.py to fall back to its own blind dead-center default. Every other entity_type
+    keeps the plain None (a "place"/"event"/"scene" image has no equivalent portrait-
+    composition assumption to lean on)."""
+    face = _detect_face_center(image_path)
+    if face is not None:
+        return face
+    if entity_type == "person":
+        return list(PORTRAIT_FALLBACK_CENTER)
+    return None
+
+
 PLACEHOLDER_PALETTE = [
     ((70, 45, 30), (18, 14, 20)),   # warm ember core -> near-black edge
     ((30, 45, 55), (12, 14, 22)),   # cool teal core -> near-black edge
@@ -329,7 +355,7 @@ def _save_image(url: str, out_base: Path, source: str, entity_type: str) -> dict
         return None
     path = out_base.with_suffix(".jpg")
     path.write_bytes(content)
-    return {"path": path, "source": source, "entity_type": entity_type, "face": _detect_face_center(path)}
+    return {"path": path, "source": source, "entity_type": entity_type, "face": _face_or_portrait_fallback(path, entity_type)}
 
 
 def _fetch_person(query: str, out_base: Path, seed: int, entity_type: str) -> dict:

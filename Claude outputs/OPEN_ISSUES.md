@@ -619,6 +619,28 @@ first, explicitly not implemented until the user confirmed "continue"):
 
 Full test suite: 75/75 pass.
 
+**Tier 2 #9 — face-unaware Ken Burns on non-photographic portraits (closes audit #35),
+added right after the above**: `fetch_visuals.py`'s Haar-cascade face detection is
+trained on real frontal photographs, but named historical figures sourced via Wikidata
+P18/Commons are overwhelmingly pre-photography imagery — paintings, engravings, coins,
+marble busts — where detection failing is the common case, not the rare one. New
+`_face_or_portrait_fallback()`: when detection fails on a `"person"` beat specifically,
+falls back to a documented upper-third framing guess (`PORTRAIT_FALLBACK_CENTER = (0.5,
+0.35)`) instead of leaving `render.py` to default to blind dead-center — the vast
+majority of single-subject portrait/bust compositions place the head in the upper third,
+not centered. Every other `entity_type` keeps the plain `None` fallback (no equivalent
+composition assumption to lean on for a place/event/scene image). A real face detection
+always wins when one is found — this only fires on genuine detection failure. 4 new
+tests, deliberately *not* mocking the detection-failure path — a real solid-color image
+naturally produces no detected face via actual cv2, the same as the real paintings/busts
+this fixes. Full suite: 79/79 pass.
+
+**All of Tier 1 and Tier 2 are now complete.** Remaining roadmap items (Tier 3) either
+need the user's explicit product decision (§7 item 12 — photorealistic vs. illustrated
+visual direction) or explicit permission to source new CC0 audio assets (mood-matched
+music variety, sound design/SFX/ambience) per this project's own download-permission
+rule — not something to proceed on unilaterally.
+
 # Full panel audit — 2026-09-12
 
 Per explicit request: a full audit of the whole application by the entire team, in
